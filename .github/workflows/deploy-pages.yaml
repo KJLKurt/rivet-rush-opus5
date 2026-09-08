@@ -1,4 +1,4 @@
-name: Deploy Rivet Rush to Pages
+name: Deploy Rivet Rush Sky Salvage to Pages
 
 on:
   push:
@@ -25,7 +25,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run prebuild
-      - run: npm run build
       - run: npm run build:gh
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

@@ -12,7 +12,7 @@
     "dev": "vite",
     "prebuild": "node scripts/generate-icons.mjs",
     "build": "tsc --noEmit && vite build",
-    "build:gh": "BASE_PATH=/rivet-rush-sky-salvage/ npm run build",
+    "build:gh": "BASE_PATH=/rivet-rush-opus5/ npm run build",
     "preview": "vite preview --port 4173 --host",
     "icons": "node scripts/generate-icons.mjs",
     "typecheck": "tsc --noEmit",
