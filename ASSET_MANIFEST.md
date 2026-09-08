@@ -24,6 +24,8 @@ normally one to three draw calls. 1 world unit ≈ 1 metre; Rivet is ~1.4 units.
 | **Hoverboard** | `Rivet.ts` | Chamfered deck, magnetic coil rings, an emissive underglow plate that swells on dash. Six colour skins. |
 | **Sparkie** | `Sparkie.ts` | One big friendly eye under a glass dome, bobbing antenna, hover fins, thruster glow. Four moods (trapped / freed / following / cheering) driven by brightness, bob rate and fin flutter. |
 | **Buzzbot, Sawdrone, Zapper, Bomblet, Shieldbot** | `Enemies.ts` | Five silhouettes distinguishable at a glance, in a shared violet/magenta hostile palette with hard white eyes. Per-kind idle, chase, telegraph, attack and stunned poses, plus a bouncing scrap-burst defeat effect. |
+| **Skitter, Lobber, Splitter, Snatcher, Warden** | `EnemiesExtra.ts` | Five more, added for Swarm mode. A flat four-legged crawler with an animated tripod gait, a mortar with an elevating recoiling barrel, a clamped pod that splits, a claw-handed thief with a containment cage, and a haloed support drone with a scalable aura. Angular spiked accents give a second, colour-blind-safe "hostile" cue. |
+| **Turret, Wall, Bomb, Shocker, Beacon, Repair Pad** | `Deployables.ts` | The player's gadgets, in warm gold/cyan on light metal so they never read as enemy tech. Visible damage states (the wall sheds slats), a build-in pop, and a placement ghost with a validity ring that changes shape as well as colour. |
 | **The Great Scrapbot** | `Boss.ts` | ~9 units tall. Hinged chest hatch over a glowing core, magnet-claw and crusher-fist arms, hover skirt, exhaust funnels, expressive eyes and eyebrow plates. Twelve animation states; phase changes shed armour and recolour the core. |
 
 ### Environment kit — `src/render/models/Props.ts`

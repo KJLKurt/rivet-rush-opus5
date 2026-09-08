@@ -10,15 +10,15 @@
 
 export const PAL = {
   // --- Rivet ---------------------------------------------------------------
-  furDark: 0x4b5570,
-  furMid: 0x7c88ab,
-  furLight: 0xc3cde6,
-  maskDark: 0x2b3049,
+  furDark: 0x5d6a90,
+  furMid: 0x9aa6c9,
+  furLight: 0xdbe3f5,
+  maskDark: 0x33395a,
   muzzle: 0xf3ead9,
   nose: 0x35304a,
   goggleRim: 0xffb03a,
   goggleGlass: 0x6de3ff,
-  scarf: 0xff7a4d,
+  scarf: 0xff8a52,
   scarfDark: 0xd94f2c,
   belly: 0xe6ecfa,
 
@@ -126,7 +126,7 @@ export const THEMES: Record<string, AreaTheme> = {
     cloudShadow: 0xc9dcf5,
     rimColor: 0x9fd8ff,
     rimIntensity: 0.75,
-    bloomStrength: 0.55,
+    bloomStrength: 0.45,
   },
   // AREA 2 — Cloudtop Gardens: soft afternoon green + pink.
   gardens: {
@@ -147,7 +147,7 @@ export const THEMES: Record<string, AreaTheme> = {
     cloudShadow: 0xd6e4f2,
     rimColor: 0xbdf0c2,
     rimIntensity: 0.8,
-    bloomStrength: 0.62,
+    bloomStrength: 0.42,
   },
   // AREA 3 — Stormworks: dramatic violet thunderhead.
   stormworks: {
@@ -168,7 +168,7 @@ export const THEMES: Record<string, AreaTheme> = {
     cloudShadow: 0x2a2450,
     rimColor: 0x8ad7ff,
     rimIntensity: 1.5,
-    bloomStrength: 0.95,
+    bloomStrength: 0.7,
   },
   // FINALE — The Great Scrapbot: sunset arena above the storm.
   finale: {
@@ -189,7 +189,7 @@ export const THEMES: Record<string, AreaTheme> = {
     cloudShadow: 0x5b4a86,
     rimColor: 0xffb56b,
     rimIntensity: 1.25,
-    bloomStrength: 0.85,
+    bloomStrength: 0.62,
   },
 };
 

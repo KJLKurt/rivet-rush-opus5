@@ -12,12 +12,17 @@ import { Collectibles, SparkiePods, Crates, Enemies } from './Entities';
 import type { CollectEvent, EnemyHitEvent, EnemyAttackEvent } from './Entities';
 import { BossFight } from './BossFight';
 import { CFG } from './Config';
+import { ENEMY_CFG } from './EnemyTypes';
 import { ALL_STAGES, isAreaStart } from './Stages';
 import type { StageDef } from './Stages';
 import { baseStats, rollUpgradeChoices, getUpgrade } from './Upgrades';
 import type { PlayerStats, Upgrade, UpgradeId } from './Upgrades';
 import { evaluateProgress, dailyModifiers, starsFor } from './Progression';
 import type { RunSummary, Achievement, Cosmetic, DailyModifier } from './Progression';
+import { SwarmDirector } from './Swarm';
+import type { SwarmSnapshot } from './Swarm';
+import { Gadgets, GADGETS, GADGET_ORDER } from './Gadgets';
+import type { DeployableKind } from '../render/models/Deployables';
 import { audio } from '../core/Audio';
 import { input } from '../core/Input';
 import { save } from '../core/Save';
@@ -34,6 +39,16 @@ import {
 export type GameState =
   | 'boot' | 'title' | 'stageIntro' | 'playing' | 'paused'
   | 'stageClear' | 'upgrade' | 'bossIntro' | 'results';
+
+/** Story mode is the 7-stage run; Swarm is the endless hold-the-pad mode. */
+export type GameMode = 'story' | 'swarm';
+
+export interface SwarmHud extends SwarmSnapshot {
+  /** Cost + affordability for each gadget button, in GADGET_ORDER. */
+  items: Array<{ kind: DeployableKind; name: string; icon: string; cost: number; afford: boolean; colour: string }>;
+  /** True when the player is standing somewhere a gadget could go. */
+  canPlaceHere: boolean;
+}
 
 export interface HudData {
   score: number;
@@ -61,6 +76,8 @@ export interface HudData {
   portalOpen: boolean;
   bossHealth: number | null;
   bossPhase: number;
+  mode: GameMode;
+  swarm: SwarmHud | null;
   /** Screen-space direction to the current objective, or null when on screen. */
   guide: { x: number; y: number; angle: number; kind: 'pod' | 'portal' | 'boss' } | null;
   fps: number;
@@ -142,6 +159,25 @@ export class Game {
   private boss: BossFight | null = null;
   private portal: THREE.Object3D | null = null;
 
+  mode: GameMode = 'story';
+  private swarm: SwarmDirector | null = null;
+  private gadgets = new Gadgets();
+  private swarmSnap: SwarmSnapshot = {
+    phase: 'build', wave: 0, buildLeft: 0, padHealth: 100, padMax: 100,
+    remaining: 0, sparkiesHome: 0, bank: 0,
+  };
+  private swarmHud: SwarmHud = {
+    ...this.swarmSnap,
+    items: GADGET_ORDER.map((k) => ({
+      kind: k, name: GADGETS[k].name, icon: GADGETS[k].icon,
+      cost: GADGETS[k].cost, afford: false, colour: GADGETS[k].colour,
+    })),
+    canPlaceHere: true,
+  };
+  private swarmPodTimer = 0;
+  private knockdown = 0;
+  private keepClear: Array<{ x: number; z: number; r: number }> = [];
+
   private run: RunState = this.freshRun(false);
   private stage: StageDef = ALL_STAGES[0]!;
   private waveQueue: Array<{ kind: Parameters<Enemies['spawn']>[0]; at: number; remaining: number; gap: number; next: number }> = [];
@@ -171,6 +207,7 @@ export class Game {
     sparkiesRescued: 0, sparkiesTotal: 0, cellsCollected: 0, cellsTotal: 0,
     stageIndex: 0, stageTitle: '', areaName: '', portalOpen: false,
     bossHealth: null, bossPhase: 1, guide: null, fps: 60,
+    mode: 'story', swarm: null,
   };
   private displayScore = 0;
 
@@ -205,6 +242,7 @@ export class Game {
     this.scene.add(this.pods.root);
     this.scene.add(this.crates.root);
     this.scene.add(this.enemies.root);
+    this.scene.add(this.gadgets.root);
     this.scene.add(this.zapRoot);
 
     this.renderer.onContextLost = () => {
@@ -280,6 +318,17 @@ export class Game {
     this.sky.setReducedMotion(s.reducedMotion);
     if (s.quality !== 'auto') this.renderer.setQuality(s.quality);
     else this.renderer.setQuality('auto');
+    this.applyCameraMode();
+  }
+
+  /**
+   * The boss arena is big and its attacks come from off-screen, so it always
+   * uses the wide framing no matter what the player picked. Everywhere else
+   * respects the setting.
+   */
+  private applyCameraMode(instant = false): void {
+    const forced = this.stage.area === 'finale';
+    this.rig.setMode(forced ? 'wide' : save.profile.settings.camera, instant);
   }
 
   resize(w: number, h: number): void {
@@ -309,7 +358,167 @@ export class Game {
   // run flow
   // =========================================================================
 
+  /**
+   * Starts Swarm mode: one arena, an endless ladder of waves, and a repair pad
+   * to hold. Reuses the story-mode player, arena and entity systems wholesale —
+   * only the objective layer differs.
+   */
+  startSwarm(): void {
+    this.mode = 'swarm';
+    this.clearTitleScene();
+    this.run = this.freshRun(false);
+    this.stats = baseStats();
+    this.dailyMods = [];
+    save.update((p) => {
+      p.runsStarted += 1;
+    });
+
+    this.player?.dispose();
+    const equipped = save.profile.equipped;
+    this.player = new Player(this.stats, equipped.board, equipped.trail);
+    this.scene.add(this.player.model.root);
+    this.scene.add(this.player.trail.mesh);
+    this.player.onDashRecharged = () => audio.play('dashRecharge', { gain: 0.35 });
+
+    this.displayScore = 0;
+    this.bossDefeatHandled = false;
+    this.loadSwarmArena();
+  }
+
+  private loadSwarmArena(): void {
+    this.teardownStage();
+    this.gadgets.clear();
+    this.run.stageIndex = 0;
+    this.stage = {
+      ...ALL_STAGES[1]!,
+      radius: 30, sparkies: 0, cells: 0, crates: 6, boltRoutes: 5, waves: [],
+      hazards: { boostPads: 4 },
+      decor: 0.75,
+    };
+
+    const seed = (Math.random() * 0xffffffff) >>> 0;
+    this.arena = new Arena(this.stage, seed);
+    this.scene.add(this.arena.root);
+    this.staticObstacles = [...this.arena.layout.obstacles];
+
+    const theme = THEMES[this.stage.area]!;
+    this.renderer.applyTheme(theme, true);
+    this.sky.applyTheme(theme);
+
+    for (const b of this.arena.layout.bolts) this.collectibles.spawn('bolt', b.x, b.z, b.y);
+    for (const c of this.arena.layout.crates) this.crates.spawn(c.x, c.z);
+    this.vents = [];
+
+    const swarm = new SwarmDirector(this.stage.radius);
+    this.scene.add(swarm.root);
+    this.swarm = swarm;
+    swarm.reset();
+    this.wireSwarm(swarm);
+
+    // Sparkies fly to a docking slot on the pad instead of trailing Rivet.
+    this.pods.homeSlotFor = (index, out) => swarm.homeSlot(index, out);
+    this.pods.onReachedHome = () => swarm.registerSparkieHome();
+
+    this.enemies.padTarget = { x: 0, z: 0, radius: swarm.padRadius };
+    this.enemies.escapeRadius = this.stage.radius + 6;
+    this.enemies.blockingLookup = (x, z, d) => this.gadgets.nearestBlocking(x, z, d);
+    this.enemies.onGadgetAttack = (x, z, damage, dt) =>
+      this.gadgets.damageAt(x, z, 0.6, damage * 2.2 * dt, this.fx);
+    this.enemies.sparkieAt = (i) => this.pods.followerAt(i);
+    this.enemies.requestSparkie = (x, z) => this.pods.nearestFollower(x, z, 26);
+    this.enemies.onSparkieGrabbed = (i) => {
+      this.pods.setCarried(i, true);
+      audio.play('playerHurt', { gain: 0.7, pitch: 1.3 });
+      this.hooks.onToast('A Sparkie is being taken!', 'warn', 2000);
+    };
+    this.enemies.onCarryUpdate = (i, x, y, z) => this.pods.placeCarried(i, x, y, z);
+    this.enemies.onSparkieDropped = (i, x, z) => {
+      this.pods.setCarried(i, false);
+      this.pods.placeCarried(i, x, 1.1, z);
+      audio.play('sparkieChirp', { gain: 0.8 });
+    };
+    this.enemies.onSparkieStolen = (i) => {
+      this.pods.removeFollower(i);
+      swarm.sparkiesHome = Math.max(0, swarm.sparkiesHome - 1);
+      audio.play('comboBreak', { gain: 0.8 });
+      this.hooks.onToast('A Sparkie was stolen!', 'warn', 2400);
+      this.hooks.onFlash('#ff4d6d', 260);
+    };
+    this.swarmPodTimer = 2;
+    this.spawnSwarmPods(3);
+
+    const spawn = { x: 0, z: swarm.padRadius + 4 };
+    this.player!.resetForStage(spawn.x, spawn.z);
+    this.player!.refreshStats();
+    this.rig.snapTo(spawn.x, spawn.z);
+    this.applyCameraMode(true);
+
+    this.hud.mode = 'swarm';
+    this.hud.stageTitle = 'Hold the Pad';
+    this.hud.areaName = 'SWARM';
+    this.setState('stageIntro');
+    this.transitionTimer = 0;
+    this.hooks.onStageCard(
+      { ...this.stage, title: 'Hold the Pad', areaName: 'SWARM', hint: 'Rescue Sparkies. Defend the pad!' },
+      true,
+    );
+    audio.playMusic('area3', 1.2);
+  }
+
+  private wireSwarm(swarm: SwarmDirector): void {
+    swarm.onSpawn = (kind, x, z) => {
+      this.enemies.spawn(kind, x, z);
+      this.fx.shockwave(x, 0.06, z, 0.3, 3, 0.35, PAL.droneShell, 0.6);
+    };
+    swarm.onWaveStart = (wave) => {
+      audio.play('bossPhase', { gain: 0.6, pitch: 1.1 });
+      this.hooks.onToast(`Wave ${wave}!`, 'warn', 2000);
+      this.hooks.onFlash('#ff5ec4', 200);
+    };
+    swarm.onWaveClear = (wave) => {
+      audio.play('victory', { gain: 0.5 });
+      this.hooks.onToast(`Wave ${wave} cleared!`, 'star', 2200);
+      // A clear pays out, so building up is always affordable.
+      swarm.addBank(40 + wave * 18);
+      this.spawnSwarmPods(1 + Math.floor(wave / 2));
+    };
+    swarm.onPadHit = (frac) => {
+      this.hooks.onFlash('#ff4d6d', 180);
+      this.rig.addTrauma(0.3);
+      if (frac < 0.3) this.hooks.onToast('The pad is failing!', 'warn', 1600);
+    };
+    swarm.onLost = () => this.endRun(false);
+    swarm.onSparkieHome = () => audio.play('sparkieChirp', { gain: 0.6 });
+  }
+
+  /** Drops fresh rescue pods around the arena between waves. */
+  private spawnSwarmPods(count: number): void {
+    const arena = this.arena;
+    if (!arena) return;
+    const R = arena.layout.radius;
+    for (let i = 0; i < count; i++) {
+      for (let attempt = 0; attempt < 30; attempt++) {
+        const a = Math.random() * Math.PI * 2;
+        const d = 8 + Math.random() * (R - 12);
+        const x = Math.cos(a) * d;
+        const z = Math.sin(a) * d;
+        let ok = true;
+        for (const o of this.staticObstacles) {
+          if ((o.x - x) ** 2 + (o.z - z) ** 2 < (o.r + 2) ** 2) {
+            ok = false;
+            break;
+          }
+        }
+        if (!ok) continue;
+        this.pods.spawn(x, z);
+        this.fx.shockwave(x, 0.08, z, 0.4, 5, 0.5, PAL.sparkieGlow, 0.9);
+        break;
+      }
+    }
+  }
+
   startRun(daily = false): void {
+    this.mode = 'story';
     this.clearTitleScene();
     this.run = this.freshRun(daily);
     this.stats = baseStats();
@@ -369,6 +578,8 @@ export class Game {
 
   private loadStage(index: number): void {
     this.teardownStage();
+    this.mode = 'story';
+    this.hud.mode = 'story';
     this.run.stageIndex = index;
     this.run.stageTime = 0;
     this.run.stageHits = 0;
@@ -450,6 +661,7 @@ export class Game {
     this.player!.resetForStage(spawn.x, spawn.z);
     this.player!.refreshStats();
     this.rig.snapTo(spawn.x, spawn.z);
+    this.applyCameraMode(true);
     this.rig.setZoomOut(stage.area === 'finale' ? 0.85 : 0);
 
     this.hud.stageIndex = index;
@@ -472,6 +684,16 @@ export class Game {
   }
 
   private teardownStage(): void {
+    if (this.swarm) {
+      this.scene.remove(this.swarm.root);
+      this.swarm.dispose();
+      this.swarm = null;
+    }
+    this.gadgets.clear();
+    this.pods.homeSlotFor = null;
+    this.pods.onReachedHome = null;
+    this.enemies.padTarget = null;
+    this.hud.swarm = null;
     this.collectibles.clear();
     this.pods.clear();
     this.crates.clear();
@@ -663,6 +885,7 @@ export class Game {
     this.obstacles.length = 0;
     for (const o of this.staticObstacles) this.obstacles.push(o);
     this.crates.colliders(this.obstacles);
+    if (this.mode === 'swarm') this.gadgets.colliders(this.obstacles);
 
     // --- player -----------------------------------------------------------
     const arenaRadius = this.stage.area === 'finale' ? CFG.boss.arenaRadius : arena.layout.radius;
@@ -681,7 +904,8 @@ export class Game {
 
     // --- world ------------------------------------------------------------
     this.updateWorld(gdt, true);
-    this.spawnWaves();
+    if (this.mode === 'swarm') this.updateSwarm(gdt);
+    else this.spawnWaves();
     this.updateHazards(gdt);
     this.updateZap(gdt);
     this.resolveEvents(gdt);
@@ -697,7 +921,7 @@ export class Game {
 
     // --- grade ------------------------------------------------------------
     const dash01 = player.dashTimer / CFG.dash.duration;
-    this.renderer.setSpeedLines(dash01 * 1.7 + player.overdriveBlend * 0.55 + player.speed01 * 0.22);
+    this.renderer.setSpeedLines(dash01 * 1.6 + player.overdriveBlend * 0.42 + player.speed01 * 0.07);
     this.renderer.setBloomBoost(player.overdriveBlend * 0.5 + dash01 * 0.25);
     this.renderer.setVignette(0.3 + player.overdriveBlend * 0.14 + (player.invuln > 0 ? 0.16 : 0));
     if (player.overdriveBlend > 0.02) {
@@ -716,9 +940,145 @@ export class Game {
     this.updateTutorial(realDt);
 
     // --- death ------------------------------------------------------------
-    if (player.dead) this.endRun(false);
+    // In Swarm mode the run ends when the *pad* falls, never when Rivet does.
+    // Being knocked out costs you the seconds you weren't defending, which is
+    // a real penalty without ending a good run on one bad moment.
+    if (player.dead) {
+      if (this.mode === 'swarm') this.beginKnockdown();
+      else this.endRun(false);
+    }
+    if (this.knockdown > 0) {
+      this.knockdown -= realDt;
+      if (this.knockdown <= 0) this.reviveAtPad();
+    }
 
     this.refreshHud();
+  }
+
+  /**
+   * Swarm mode's per-frame work: run the wave director, let gadgets act, hand
+   * bolts to the bank, and let drones chew on the pad.
+   */
+  private updateSwarm(gdt: number): void {
+    const swarm = this.swarm;
+    const player = this.player;
+    if (!swarm || !player) return;
+
+    // Gadgets shoot, explode and zap.
+    this.enemyHitBuffer.length = 0;
+    this.gadgets.update(gdt, this.enemies, this.fx, this.enemyHitBuffer);
+    this.processEnemyHits();
+
+    // Beacons repair the pad.
+    const repair = this.gadgets.repairRateAt(swarm.padPosition.x, swarm.padPosition.z);
+    swarm.update(gdt, this.fx, repair);
+
+    // Drop a rescue pod now and then so there is always something to go and do.
+    this.swarmPodTimer -= gdt;
+    if (this.swarmPodTimer <= 0) {
+      this.swarmPodTimer = 14 + Math.random() * 8;
+      if (this.pods.remaining < 4) this.spawnSwarmPods(1);
+    }
+
+    // Anything that wants the pad and has reached it starts doing damage.
+    const padR = swarm.padRadius + 1.2;
+    this.enemies.forEachAlive((x, z, kind) => {
+      if (!ENEMY_CFG[kind].targetsPad) return;
+      if (x * x + z * z < padR * padR) {
+        // Tuned so a full undefended wave takes ~15s to bring the pad down —
+        // long enough that the player can always see it happening and go and
+        // do something about it.
+        swarm.damagePad(ENEMY_CFG[kind].damage * 1.8 * gdt, this.fx);
+      }
+    });
+
+    if (swarm.phase === 'lost') return;
+    this.refreshSwarmHud();
+  }
+
+  /** Rivet is out of hearts in Swarm mode: pop, hide, and rebuild at the pad. */
+  private beginKnockdown(): void {
+    const player = this.player!;
+    if (this.knockdown > 0) return;
+    this.knockdown = 2.6;
+    audio.play('gameOver', { gain: 0.6 });
+    this.hooks.onFlash('#ff4d6d', 320);
+    this.hooks.onToast('Knocked out! Repairing…', 'refresh', 2400);
+    this.rig.addTrauma(0.7);
+    this.fx.burst('glow', player.position.x, 0.9, player.position.z, {
+      count: 30, color: PAL.danger, color2: PAL.overdriveHot,
+      speed: 11, size: 0.5, life: 0.7,
+    });
+    player.model.root.visible = false;
+    player.trail.mesh.visible = false;
+  }
+
+  private reviveAtPad(): void {
+    const player = this.player!;
+    const swarm = this.swarm;
+    const x = swarm ? swarm.padPosition.x : 0;
+    const z = swarm ? swarm.padPosition.z + swarm.padRadius + 2 : 0;
+    player.dead = false;
+    player.hearts = this.stats.maxHearts;
+    player.shields = player.shieldMax;
+    player.resetForStage(x, z);
+    player.invuln = 2.2;
+    player.model.root.visible = true;
+    player.trail.mesh.visible = true;
+    this.rig.snapTo(x, z);
+    audio.play('shieldGain');
+    this.fx.shockwave(x, 0.1, z, 0.5, 8, 0.5, PAL.shield, 1);
+  }
+
+  private refreshSwarmHud(): void {
+    const swarm = this.swarm;
+    const player = this.player;
+    if (!swarm || !player) return;
+    swarm.snapshot(this.swarmSnap);
+    const h = this.swarmHud;
+    Object.assign(h, this.swarmSnap);
+    for (const item of h.items) {
+      item.afford = swarm.bank >= item.cost;
+    }
+    this.keepClear.length = 0;
+    this.keepClear.push({ x: 0, z: 0, r: swarm.padRadius + 1 });
+    h.canPlaceHere =
+      this.gadgets.canPlace('wall', player.position.x, player.position.z, Infinity, this.keepClear) === 'ok';
+    this.hud.swarm = h;
+  }
+
+  /**
+   * Builds a gadget where Rivet is standing. Called straight from the item bar.
+   * Placement is at the player's feet on purpose — see the note in Gadgets.ts.
+   */
+  placeGadget(kind: DeployableKind): void {
+    const swarm = this.swarm;
+    const player = this.player;
+    if (this.mode !== 'swarm' || !swarm || !player || this.state !== 'playing') return;
+
+    this.keepClear.length = 0;
+    this.keepClear.push({ x: 0, z: 0, r: swarm.padRadius + 1 });
+    const result = this.gadgets.canPlace(
+      kind, player.position.x, player.position.z, swarm.bank, this.keepClear,
+    );
+    if (result !== 'ok') {
+      audio.play('dashFail', { gain: 0.6 });
+      this.hooks.onToast(
+        result === 'tooPoor' ? 'Not enough bolts!' : result === 'full' ? 'Too many gadgets!' : 'No room here!',
+        result === 'tooPoor' ? 'coin' : 'warn',
+        1400,
+      );
+      return;
+    }
+    swarm.spend(GADGETS[kind].cost);
+    this.gadgets.place(kind, player.position.x, player.position.z, player.facing);
+    audio.play('upgradePick', { gain: 0.8 });
+    this.hooks.onHaptic(20);
+    this.fx.shockwave(player.position.x, 0.1, player.position.z, 0.4, 4, 0.35, PAL.energyWarm, 0.9);
+    this.fx.burst('glow', player.position.x, 0.6, player.position.z, {
+      count: 16, color: PAL.bolt, speed: 6, size: 0.4, life: 0.4, upBias: 0.5,
+    });
+    this.refreshSwarmHud();
   }
 
   /** Everything that keeps animating even while gameplay is frozen. */
@@ -746,6 +1106,9 @@ export class Game {
     this.crates.update(gdt, px, pz);
 
     if (interactive) {
+      this.enemies.padTarget = this.mode === 'swarm' && this.swarm
+        ? { x: this.swarm.padPosition.x, z: this.swarm.padPosition.z, radius: this.swarm.padRadius }
+        : null;
       this.attackBuffer.length = 0;
       this.enemies.update(
         gdt, px, pz, CFG.player.radius,
@@ -780,7 +1143,7 @@ export class Game {
         const x = Math.cos(a) * d;
         const z = Math.sin(a) * d;
         this.enemies.spawn(wave.kind, x, z);
-        this.fx.burst('glow', x, CFG.enemies[wave.kind].hover, z, {
+        this.fx.burst('glow', x, ENEMY_CFG[wave.kind].hover, z, {
           count: 12, color: PAL.droneShell, speed: 6, size: 0.4, life: 0.4,
         });
         this.fx.shockwave(x, 0.06, z, 0.3, 3, 0.35, PAL.droneShell, 0.6);
@@ -1114,6 +1477,10 @@ export class Game {
       }
       if (hit.killed) {
         this.run.enemies += 1;
+        if (this.mode === 'swarm') {
+          this.swarm?.noteEnemyDefeated();
+          this.swarm?.addBank(6);
+        }
         audio.play('enemyDefeat', { pos: { x: hit.x, y: hit.y, z: hit.z } });
         this.bumpCombo();
         this.player!.addOverdrive(CFG.overdrive.gainPerEnemy, this.comboTier());
@@ -1139,6 +1506,7 @@ export class Game {
     for (const c of this.collectBuffer) {
       if (c.kind === 'bolt') {
         this.run.bolts += 1;
+        if (this.mode === 'swarm') this.swarm?.addBank(4);
         this.bumpCombo();
         player.addOverdrive(CFG.overdrive.gainPerBolt, this.comboTier());
         const tier = this.comboTier();
@@ -1282,6 +1650,7 @@ export class Game {
   // =========================================================================
 
   private checkObjectives(): void {
+    if (this.mode === 'swarm') return;
     if (this.boss) {
       if (this.boss.defeated && this.state === 'playing') {
         this.transitionTimer += 0;
@@ -1484,6 +1853,7 @@ export class Game {
   // =========================================================================
 
   private endRun(won: boolean): void {
+    if (this.mode === 'swarm' && this.swarm) this.run.score += this.swarm.endBonus();
     audio.stopHover();
     audio.setOverdrive(false);
     audio.setMuffle(0.5);
@@ -1499,7 +1869,9 @@ export class Game {
       dashes: this.run.dashes,
       overdrives: this.run.overdrives,
       crates: this.run.crates,
-      stagesCleared: won ? ALL_STAGES.length : this.run.stageIndex,
+      stagesCleared: this.mode === 'swarm'
+        ? (this.swarm?.wave ?? 0)
+        : won ? ALL_STAGES.length : this.run.stageIndex,
       won,
       timeSeconds: this.run.totalTime,
       hitsTaken: this.run.hitsTaken,
@@ -1587,6 +1959,8 @@ export class Game {
 
   /** Quit to the title screen mid-run. */
   abandon(): void {
+    this.mode = 'story';
+    this.hud.mode = 'story';
     audio.stopHover();
     audio.setMuffle(0);
     audio.setOverdrive(false);
@@ -1610,6 +1984,7 @@ export class Game {
   retry(): void {
     this.bossDefeatHandled = false;
     const daily = this.run.daily;
+    const mode = this.mode;
     this.teardownStage();
     if (this.player) {
       this.scene.remove(this.player.model.root);
@@ -1618,7 +1993,8 @@ export class Game {
       this.player = null;
     }
     audio.setMuffle(0);
-    this.startRun(daily);
+    if (mode === 'swarm') this.startSwarm();
+    else this.startRun(daily);
   }
 
   // =========================================================================
@@ -1658,6 +2034,8 @@ export class Game {
     h.portalOpen = this.portalOpen;
     h.bossHealth = this.boss ? this.boss.healthFraction : null;
     h.bossPhase = this.boss ? this.boss.phase : 1;
+    h.mode = this.mode;
+    h.swarm = this.mode === 'swarm' ? this.swarmHud : null;
     h.guide = this.computeGuide();
   }
 
@@ -1819,6 +2197,17 @@ export class Game {
         });
       }
     }
+  }
+
+  /** Swarm-mode diagnostics for the automated test. */
+  swarmDebug(): Record<string, number | string> | null {
+    const sw = this.swarm;
+    if (!sw) return null;
+    return {
+      phase: sw.phase, wave: sw.wave,
+      pad: Math.round(sw.padHp), bank: sw.bank,
+      home: sw.sparkiesHome, gadgets: this.gadgets.count,
+    };
   }
 
   /** Equip a cosmetic mid-session. */

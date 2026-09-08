@@ -24,8 +24,12 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run prebuild
-      - run: npm run build:gh
+      # Derive the base path from the repository name so a rename can never
+      # leave Pages serving a white screen with 404'd assets. `prebuild`
+      # (icon generation) runs automatically as part of `build`.
+      - run: npm run build
+        env:
+          BASE_PATH: /${{ github.event.repository.name }}/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

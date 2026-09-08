@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { icon } from './Icons';
 import type { Game, GameState, HudData, ResultsData } from '../game/Game';
+import type { DeployableKind } from '../render/models/Deployables';
 import type { Upgrade } from '../game/Upgrades';
 import type { StageDef } from '../game/Stages';
 import { ACHIEVEMENTS, COSMETICS, cosmeticsOfKind, dailyModifiers } from '../game/Progression';
 import { save, DEFAULT_SETTINGS } from '../core/Save';
-import type { QualityLevel } from '../core/Save';
+import type { QualityLevel, CameraSetting } from '../core/Save';
 import { audio } from '../core/Audio';
 import { input } from '../core/Input';
 import { formatScore, formatTime, clamp01, hashString, localDateKey } from '../core/Util';
@@ -73,7 +74,15 @@ export class UI {
   private hintEl!: HTMLElement;
   private flashEl!: HTMLElement;
   private fpsEl!: HTMLElement;
+  private swarmTop!: HTMLElement;
+  private waveChip!: HTMLElement;
+  private padFill!: HTMLElement;
+  private bankEl!: HTMLElement;
+  private itemBar!: HTMLElement;
+  private lastBank = -1;
+  private lastWave = -1;
 
+  private itemKinds: DeployableKind[] = [];
   private pops: PopLabel[] = [];
   private popPool: HTMLElement[] = [];
   private lastScore = 0;
@@ -151,6 +160,16 @@ export class UI {
         <button class="dash-btn" data-act="dash" aria-label="Dash">${icon('dash', 44)}<span>DASH</span></button>
         <button class="od-btn" data-act="overdrive" aria-label="Overdrive">${icon('star', 40)}</button>
 
+        <div class="swarm-top">
+          <div class="wave-chip"><span class="wave-label">WAVE 1</span><span class="wave-sub"></span></div>
+          <div class="pad-bar">
+            <div class="pad-label">${icon('home', 16)}<span>REPAIR PAD</span></div>
+            <div class="pad-track"><div class="pad-fill"></div></div>
+          </div>
+        </div>
+        <div class="bank"><span class="bank-icon">${icon('coin', 22)}</span><span class="bank-n">0</span></div>
+        <div class="item-bar"></div>
+
         <div class="guide"><i class="arrow"></i></div>
         <div class="fps subtle hidden" style="position:absolute;left:12px;bottom:8px"></div>
       </div>
@@ -173,6 +192,11 @@ export class UI {
     this.stickKnob = this.hud.querySelector('.stick-knob')!;
     this.guideEl = this.hud.querySelector('.guide')!;
     this.fpsEl = this.hud.querySelector('.fps')!;
+    this.swarmTop = this.hud.querySelector('.swarm-top')!;
+    this.waveChip = this.hud.querySelector('.wave-chip')!;
+    this.padFill = this.hud.querySelector('.pad-fill')!;
+    this.bankEl = this.hud.querySelector('.bank')!;
+    this.itemBar = this.hud.querySelector('.item-bar')!;
 
     this.labels = $(`<div id="labels"></div>`);
     this.toasts = $(`<div id="toasts"></div>`);
@@ -199,7 +223,10 @@ export class UI {
 
         <div class="title-actions">
           <div class="best-chip">${icon('trophy', 18)}<span class="best">Best 0</span></div>
-          <button class="btn primary" data-act="play">${icon('play', 26)} PLAY</button>
+          <div class="mode-row">
+            <button class="mode-btn story" data-act="play">${icon('play', 24)} ADVENTURE<small>Rescue &amp; boss</small></button>
+            <button class="mode-btn swarm" data-act="swarm">${icon('drone', 22)} SWARM<small>Hold the pad</small></button>
+          </div>
           <div class="title-row">
             <button class="btn ghost" data-act="daily">${icon('calendar', 20)} Daily</button>
             <button class="btn ghost hidden" data-act="install">${icon('install', 20)} Install</button>
@@ -370,6 +397,25 @@ export class UI {
     bindHold(this.dashBtn, 'dash');
     bindHold(this.odBtn, 'overdrive');
 
+    // Item bar: one tap builds the gadget where Rivet is standing. Deliberately
+    // pointerdown rather than click, so it feels as immediate as the dash.
+    this.itemBar.addEventListener('pointerdown', (e) => {
+      const btn = (e.target as HTMLElement).closest('[data-item]');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.game.placeGadget(btn.getAttribute('data-item') as DeployableKind);
+    });
+    // Number keys 1-5 on desktop.
+    window.addEventListener('keydown', (e) => {
+      if (this.lastState !== 'playing') return;
+      const n = Number(e.key);
+      if (!Number.isInteger(n) || n < 1 || n > 5) return;
+      const kinds = this.itemKinds;
+      const kind = kinds[n - 1];
+      if (kind) this.game.placeGadget(kind);
+    });
+
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       this.installPrompt = e as unknown as BeforeInstallPromptEventLike;
@@ -386,6 +432,10 @@ export class UI {
       case 'play':
         audio.play('uiConfirm');
         this.game.startRun(false);
+        break;
+      case 'swarm':
+        audio.play('uiConfirm');
+        this.game.startSwarm();
         break;
       case 'daily':
         audio.play('uiConfirm');
@@ -568,6 +618,7 @@ export class UI {
 
     // Objective chip.
     const done = h.sparkiesRescued >= h.sparkiesTotal && h.sparkiesTotal > 0;
+    this.objectiveEl.classList.toggle('hidden', h.mode === 'swarm');
     this.objectiveEl.classList.toggle('done', done);
     if (h.bossHealth === null) {
       this.objectiveEl.innerHTML =
@@ -631,6 +682,61 @@ export class UI {
         `rotate(${-h.guide.angle - Math.PI / 2}rad)`;
     } else {
       this.guideEl.classList.remove('show');
+    }
+
+    // --- Swarm mode --------------------------------------------------------
+    const sw = h.swarm;
+    const swarmOn = h.mode === 'swarm' && sw !== null;
+    this.swarmTop.classList.toggle('show', swarmOn);
+    this.bankEl.classList.toggle('show', swarmOn);
+    this.itemBar.classList.toggle('show', swarmOn);
+    if (sw) {
+      if (this.itemBar.childElementCount !== sw.items.length) {
+        this.itemKinds = sw.items.map((i) => i.kind);
+        this.itemBar.innerHTML = sw.items
+          .map((it, n) => `
+            <button class="item" data-item="${it.kind}" style="--tint:${it.colour}">
+              <span class="item-key">${n + 1}</span>
+              ${icon(it.icon, 26)}
+              <span class="item-name">${escapeHtml(it.name)}</span>
+              <span class="item-cost">${icon('coin', 12)}${it.cost}</span>
+            </button>`)
+          .join('');
+      }
+      for (let i = 0; i < this.itemBar.childElementCount; i++) {
+        const el = this.itemBar.children[i] as HTMLElement;
+        const item = sw.items[i]!;
+        el.classList.toggle('afford', item.afford);
+        el.classList.toggle('blocked', !sw.canPlaceHere);
+      }
+
+      if (sw.bank !== this.lastBank) {
+        (this.bankEl.querySelector('.bank-n') as HTMLElement).textContent = formatScore(sw.bank);
+        if (sw.bank > this.lastBank) {
+          this.bankEl.classList.remove('bump');
+          void this.bankEl.offsetWidth;
+          this.bankEl.classList.add('bump');
+        }
+        this.lastBank = sw.bank;
+      }
+
+      const building = sw.phase === 'build';
+      this.waveChip.classList.toggle('building', building);
+      (this.waveChip.querySelector('.wave-label') as HTMLElement).textContent =
+        building ? `WAVE ${sw.wave + 1}` : `WAVE ${sw.wave}`;
+      (this.waveChip.querySelector('.wave-sub') as HTMLElement).textContent =
+        building ? `builds in ${Math.ceil(sw.buildLeft)}s` : `${sw.remaining} left`;
+      if (sw.wave !== this.lastWave) {
+        this.waveChip.classList.remove('tier-up');
+        void this.waveChip.offsetWidth;
+        this.waveChip.classList.add('tier-up');
+        this.lastWave = sw.wave;
+      }
+
+      const padFrac = clamp01(sw.padHealth / sw.padMax);
+      this.padFill.style.width = `${padFrac * 100}%`;
+      this.padFill.classList.toggle('warn', padFrac < 0.6);
+      this.padFill.classList.toggle('crit', padFrac < 0.3);
     }
 
     if (save.profile.settings.showFps) {
@@ -890,6 +996,14 @@ export class UI {
       ${toggle('bigUI', 'Bigger buttons', 'install')}
       ${toggle('showFps', 'Show FPS', 'info')}
       <div class="row">
+        <div class="row-label">${icon('eye', 22)}Camera</div>
+        <div class="seg" data-seg="camera">
+          ${([['chase', 'CLOSE'], ['wide', 'WIDE']] as const)
+            .map(([v, l]) => `<button class="${s.camera === v ? 'on' : ''}" data-cam="${v}">${l}</button>`)
+            .join('')}
+        </div>
+      </div>
+      <div class="row">
         <div class="row-label">${icon('settings', 22)}Graphics</div>
         <div class="seg" data-seg="quality">
           ${(['auto', 'low', 'medium', 'high'] as const)
@@ -930,6 +1044,20 @@ export class UI {
         audio.play('uiToggle');
         this.game.applySettings();
         this.applyBodyClasses();
+      });
+    });
+
+    body.querySelectorAll('[data-cam]').forEach((btnEl) => {
+      const el = btnEl as HTMLElement;
+      el.addEventListener('click', () => {
+        const cam = el.dataset.cam as CameraSetting;
+        save.update((p) => {
+          p.settings.camera = cam;
+        });
+        body.querySelectorAll('[data-cam]').forEach((o) => o.classList.remove('on'));
+        el.classList.add('on');
+        audio.play('uiConfirm');
+        this.game.applySettings();
       });
     });
 

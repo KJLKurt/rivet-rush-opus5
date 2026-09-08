@@ -143,15 +143,33 @@ points at the nearest objective, and only when it is genuinely off-screen.
 
 ## 6. Enemies
 
-Every one telegraphs, and every one is a wind-up toy rather than a threat.
+Ten types. Every one telegraphs, and every one is a wind-up toy rather than a
+threat.
 
 | Enemy | Behaviour | The answer |
 | --- | --- | --- |
 | **Buzzbot** | Drifts toward you with a lazy wobble. | Anything. It's the tutorial. |
+| **Skitter** | Low four-legged crawler. Very fast, very fragile, arrives in packs and moves in erratic bursts. | Dash through the pack. |
 | **Sawdrone** | Circles, then commits to a fast, perfectly straight charge after a 0.6 s wind-up. | Move sideways. |
-| **Zapper** | Stationary turret. Charges a visible orb for 1.1 s while slowly tracking you, then fires a beam down a marked line. | Keep moving. |
 | **Bomblet** | Chases fast, then flashes and detonates in a marked radius after 0.95 s. | Dash away, or kill it first. |
+| **Splitter** | Slow clamped pod that breaks into two smaller pods when destroyed. | Kill it somewhere you have room. |
+| **Zapper** | Stationary turret. Charges a visible orb for 1.1 s while slowly tracking you, then fires a beam down a marked line. | Keep moving. |
+| **Lobber** | Stationary mortar. Arcs a shell at a circle drawn on the floor for the shell's whole flight. | Don't stand still. |
 | **Shieldbot** | Advances behind a hex shield that bounces zaps off. | **Dash it** to shatter the shield. |
+| **Snatcher** | Ignores you. Grabs a rescued Sparkie in its claws and runs for the edge. | Kill it before it escapes — it drops what it's carrying. |
+| **Warden** | Support drone projecting a protective aura over everything nearby. | Kill it first. |
+
+**Telling friend from foe.** Every hostile machine is violet/magenta with a hard
+angular eye and spiky accents; every friendly one is a soft rounded cream/cyan
+blob. That wasn't enough on its own at the game's camera distance, so there are
+two more channels that don't depend on colour at all:
+
+- Enemies stand in a **ground ring that pulses**, and it beats faster while they
+  wind up an attack.
+- Rescue pods get a **column of light**, a **chevron bobbing above** pointing
+  down at them, and a **slowly breathing ground ring**. All three vanish the
+  moment the Sparkie is freed, so the screen only ever advertises things you
+  still have to do.
 
 Defeated drones pop into harmless bouncing scrap and drop bolts, so every kill
 feeds the combo. There is no gore, no death animation, nothing frightening.
@@ -208,7 +226,58 @@ the choice always means something.
 Six picks per run out of eighteen options, stacking, means the "all-magnet",
 "all-dash", "Sparkie swarm" and "glass cannon" runs all feel materially different.
 
-## 9. Difficulty
+## 9. Camera
+
+Two presets, switchable in Settings and blended over ~0.3s so a change mid-run
+never cuts:
+
+- **Close** (default) — behind and above, ~35°. The cast reads about 40% bigger,
+  which is what makes friend-vs-foe legible at a glance.
+- **Wide** — the original ~43° overhead. Less character detail, more tactical
+  awareness; the better choice once a lot of things are converging on you.
+
+The boss arena forces Wide regardless, because its attacks originate off-screen.
+
+## 10. Swarm mode — "Hold the Repair Pad"
+
+The second mode, unlocked from the title screen. One arena, endless waves.
+
+Rescued Sparkies fly to a **repair pad** in the middle instead of trailing
+Rivet. Waves of drones march on the pad. **You lose when the pad falls, not when
+you run out of hearts** — being knocked out costs you 2.6 seconds and a respawn,
+which is a real penalty without ending a good run on one bad moment.
+
+The loop alternates:
+
+- **Build** (16 s, 24 s before wave 1) — rescue stragglers, collect bolts, spend.
+- **Fight** — a mixed wave spawns on the rim and walks in.
+
+Each wave adds exactly one new enemy type and then keeps it, so the player is
+never asked to learn two behaviours at once. Wave 6 introduces the Snatcher,
+which is when the mode grows real stakes: it steals a Sparkie you already saved.
+
+### Gadgets and currency
+
+Bolts are score **and** currency, at 4 apiece, plus 6 per drone and a clear bonus
+of `40 + wave × 18`. Everything resets next run — no bank, no grind, so a
+first-time player and a veteran start on equal footing.
+
+| Gadget | Cost | Does |
+| --- | --- | --- |
+| **Turret** | 50 | Auto-fires at drones in a 9 m radius |
+| **Wall** | 30 | Blocks the path; drones stop and chew through it |
+| **Bomb** | 70 | Proximity mine, big splash |
+| **Shocker** | 110 | Pulses damage + stun in a 6 m ring |
+| **Beacon** | 90 | Slowly repairs the pad |
+
+**Placement is aim-free**: tapping an item builds it **where Rivet is standing**.
+The whole game is built on "you never aim, you position", and asking a
+seven-year-old to drag a cursor around a 3D plane with their thumb while drones
+close in would break that promise. Choosing *where to stand* is the interesting
+decision; pointing at a tile is just friction. Gadgets have health and drones
+destroy them, so a defence erodes and has to be rebuilt — that's the tension.
+
+## 11. Difficulty
 
 The curve is built from four independent dials, so it can be tuned without any
 one of them spiking:
@@ -222,7 +291,7 @@ Fairness rails: no falling, no off-screen damage, generous i-frames, 1.5 s of
 invulnerability after a hit, telegraphs on everything, repair hearts in the back
 half of the run, and shields that refresh each stage.
 
-## 10. Replayability
+## 12. Replayability
 
 - **Score chase.** Best score, best combo and a local top-eight table.
 - **Sixteen achievements**, all skill-shaped ("clear a stage without a scratch",
@@ -237,7 +306,7 @@ half of the run, and shields that refresh each stage.
   identical on the same device all day, and there is **no streak** and nothing to
   lose by skipping a day.
 
-## 11. What we deliberately left out
+## 13. What we deliberately left out
 
 No ads, no purchases, no login, no chat, no social features, no daily-login
 rewards, no energy timers, no loot boxes, no personal data collection. A child can

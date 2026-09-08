@@ -7,8 +7,9 @@ import { getTexture } from '../render/Textures';
 import {
   createBoltPickup, createEnergyCell, createHeartPickup, createSparkiePod, createCrate,
 } from '../render/models/Props';
-import { createEnemy, createScrapBurst } from '../render/models/Enemies';
-import type { EnemyKind, EnemyModel, EnemyAnimState } from '../render/models/Enemies';
+import type { EnemyModel, EnemyAnimState } from '../render/models/Enemies';
+import { buildEnemyModel, buildScrapBurst, ENEMY_CFG } from './EnemyTypes';
+import type { AnyEnemyKind, EnemyCfg } from './EnemyTypes';
 import { SparkieModel } from '../render/models/Sparkie';
 import { clamp, clamp01, damp, swapRemove } from '../core/Util';
 
@@ -203,7 +204,7 @@ export class Collectibles {
       }
       const halo = p.obj.userData.halo as THREE.Sprite | undefined;
       if (halo) {
-        const s = (p.kind === 'cell' ? 2.0 : p.kind === 'heart' ? 1.7 : 1.15) *
+        const s = (p.kind === 'cell' ? 1.55 : p.kind === 'heart' ? 1.35 : 0.78) *
           (1 + Math.sin(this.time * 4 + p.phase) * 0.12 + (p.magnetised ? 0.35 : 0));
         halo.scale.setScalar(s);
       }
@@ -246,6 +247,12 @@ interface Pod {
   rescued: boolean;
   openT: number;
   phase: number;
+  /** Vertical column of cyan light: "a friend is trapped here". */
+  beacon: THREE.Mesh;
+  /** Bobbing chevron above the beacon, pointing down at the pod. */
+  chevron: THREE.Mesh;
+  /** Friendly ground ring, the counterpart to the enemies' hostile ring. */
+  ring: THREE.Mesh;
 }
 
 export class SparkiePods {
@@ -253,10 +260,18 @@ export class SparkiePods {
   private pods: Pod[] = [];
   private podPool: THREE.Group[] = [];
   private sparkiePool: SparkieModel[] = [];
+  private markerPool: Array<{ beacon: THREE.Mesh; chevron: THREE.Mesh; ring: THREE.Mesh }> = [];
   private time = 0;
 
   /** Sparkies following Rivet in a conga line after being freed. */
-  private followers: Array<{ model: SparkieModel; x: number; z: number; y: number; delay: number }> = [];
+  private followers: Array<{ model: SparkieModel; x: number; z: number; y: number; delay: number; home: boolean; carried: boolean }> = [];
+  /**
+   * Swarm mode: instead of trailing Rivet, freed Sparkies fly to a docking slot
+   * on the repair pad. Returning null keeps the default conga-line behaviour.
+   */
+  homeSlotFor: ((index: number, out: THREE.Vector3) => THREE.Vector3 | null) | null = null;
+  /** Fired the first time a Sparkie actually reaches its slot. */
+  onReachedHome: ((index: number) => void) | null = null;
   private trailHistory: Array<{ x: number; z: number; t: number }> = [];
 
   spawn(x: number, z: number): void {
@@ -279,7 +294,69 @@ export class SparkiePods {
     sparkie.root.position.set(x, 0.62, z);
     sparkie.root.scale.setScalar(1);
 
-    this.pods.push({ obj, sparkie, x, z, rescued: false, openT: 0, phase: Math.random() * 6.28 });
+    const marks = this.acquireMarkers();
+    marks.beacon.position.set(x, 3.9, z);
+    marks.chevron.position.set(x, 3.6, z);
+    marks.ring.position.set(x, 0.05, z);
+    this.pods.push({
+      obj, sparkie, x, z, rescued: false, openT: 0, phase: Math.random() * 6.28,
+      beacon: marks.beacon, chevron: marks.chevron, ring: marks.ring,
+    });
+  }
+
+  /**
+   * The "rescue me" marker set.
+   *
+   * Players reported not being able to tell rescue targets from enemies. A pod
+   * is small, sits on the floor, and (deliberately) uses hostile magenta on its
+   * cage locks, so at the game's camera distance it read as just another drone.
+   * Three cheap additions fix it, and none of them rely on colour alone:
+   *   - a tall column of cyan light, visible from anywhere in the arena
+   *   - a chevron bobbing above it, pointing down
+   *   - a soft friendly ground ring that *breathes* slowly, where the hostile
+   *     ring pulses fast
+   * All three vanish the instant the Sparkie is freed, so the screen only ever
+   * advertises things you still have to do.
+   */
+  private acquireMarkers(): { beacon: THREE.Mesh; chevron: THREE.Mesh; ring: THREE.Mesh } {
+    const hit = this.markerPool.pop();
+    if (hit) {
+      hit.beacon.visible = true;
+      hit.chevron.visible = true;
+      hit.ring.visible = true;
+      return hit;
+    }
+    const beacon = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.5, 1.05, 7.6, 14, 1, true),
+      new THREE.MeshBasicMaterial({
+        map: getTexture('gridGlow'),
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.3,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+        fog: false,
+      }),
+    );
+    beacon.renderOrder = 6;
+    this.root.add(beacon);
+
+    // A flat 3D chevron (two angled bars) rather than a sprite, so it reads as
+    // part of the world and catches the light of the beacon behind it.
+    const chevron = new THREE.Mesh(new THREE.ConeGeometry(0.66, 0.95, 4), glowMat(PAL.cellHot, 0.95, true));
+    chevron.rotation.x = Math.PI;
+    chevron.rotation.y = Math.PI / 4;
+    chevron.renderOrder = 7;
+    this.root.add(chevron);
+
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.7, 1, 28), glowMat(PAL.sparkieGlow, 0.55, true));
+    ring.rotation.x = -Math.PI / 2;
+    ring.renderOrder = 3;
+    this.root.add(ring);
+
+    return { beacon, chevron, ring };
   }
 
   get remaining(): number {
@@ -321,7 +398,11 @@ export class SparkiePods {
       if ((p.x - x) ** 2 + (p.z - z) ** 2 < radius * radius) {
         p.rescued = true;
         p.sparkie.setMood('freed');
-        this.followers.push({ model: p.sparkie, x: p.x, z: p.z, y: 1.2, delay: this.followers.length * 0.09 + 0.22 });
+        this.followers.push({
+          model: p.sparkie, x: p.x, z: p.z, y: 1.2,
+          delay: this.followers.length * 0.09 + 0.22,
+          home: false, carried: false,
+        });
         out.push({ x: p.x, z: p.z });
       }
     }
@@ -339,6 +420,25 @@ export class SparkiePods {
       const dome = p.obj.userData.dome as THREE.Mesh | undefined;
       const locks = p.obj.userData.locks as THREE.Mesh[] | undefined;
       const glow = p.obj.userData.glow as THREE.Mesh | undefined;
+
+      // Markers only exist while the Sparkie still needs you.
+      const wanted = !p.rescued;
+      const fade = wanted ? 1 : Math.max(0, 1 - p.openT * 2);
+      p.beacon.visible = fade > 0.01;
+      p.chevron.visible = fade > 0.01;
+      p.ring.visible = fade > 0.01;
+      if (fade > 0.01) {
+        const breathe = 0.5 + Math.sin(this.time * 1.7 + p.phase) * 0.5;
+        (p.beacon.material as THREE.MeshBasicMaterial).opacity = fade * (0.3 + breathe * 0.26);
+        const bmat = p.beacon.material as THREE.MeshBasicMaterial;
+        if (bmat.map) bmat.map.offset.y = -this.time * 0.28;
+        p.chevron.position.y = 3.6 + Math.sin(this.time * 2.4 + p.phase) * 0.34;
+        p.chevron.rotation.y = this.time * 0.9;
+        (p.chevron.material as THREE.MeshBasicMaterial).opacity = fade * (0.7 + breathe * 0.3);
+        const rs = 1.5 + breathe * 0.3;
+        p.ring.scale.set(rs, rs, 1);
+        (p.ring.material as THREE.MeshBasicMaterial).opacity = fade * (0.42 + breathe * 0.35);
+      }
 
       if (p.rescued) {
         p.openT = Math.min(1, p.openT + dt * 3.4);
@@ -381,10 +481,27 @@ export class SparkiePods {
     // Followers.
     for (let i = 0; i < this.followers.length; i++) {
       const f = this.followers[i]!;
-      const targetTime = this.time - f.delay;
-      const target = this.sampleTrail(targetTime);
-      const tx = target ? target.x : px;
-      const tz = target ? target.z : pz;
+      if (f.carried) {
+        // A snatcher has it; the enemy drives its transform.
+        f.model.update(dt, 4);
+        continue;
+      }
+      let tx: number;
+      let tz: number;
+      const slot = this.homeSlotFor?.(i, _homeTmp) ?? null;
+      if (slot) {
+        tx = slot.x;
+        tz = slot.z;
+        if (!f.home && (f.x - tx) ** 2 + (f.z - tz) ** 2 < 1.2) {
+          f.home = true;
+          this.onReachedHome?.(i);
+        }
+      } else {
+        const targetTime = this.time - f.delay;
+        const target = this.sampleTrail(targetTime);
+        tx = target ? target.x : px;
+        tz = target ? target.z : pz;
+      }
       f.x = damp(f.x, tx, 9, dt);
       f.z = damp(f.z, tz, 9, dt);
       f.y = damp(f.y, 1.15 + Math.sin(this.time * 3 + i * 0.9) * 0.16, 6, dt);
@@ -413,6 +530,59 @@ export class SparkiePods {
     }
   }
 
+  /** World position of rescued Sparkie #index, or null if it's gone. */
+  followerAt(index: number): { x: number; z: number } | null {
+    const f = this.followers[index];
+    return f && !f.carried ? { x: f.x, z: f.z } : null;
+  }
+
+  /** The nearest un-carried, already-home Sparkie — a snatcher's shopping list. */
+  nearestFollower(x: number, z: number, maxDist: number): number {
+    let best = -1;
+    let bestD = maxDist * maxDist;
+    for (let i = 0; i < this.followers.length; i++) {
+      const f = this.followers[i]!;
+      if (f.carried) continue;
+      const d = (f.x - x) ** 2 + (f.z - z) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  setCarried(index: number, carried: boolean): void {
+    const f = this.followers[index];
+    if (f) {
+      f.carried = carried;
+      if (!carried) f.home = false;
+    }
+  }
+
+  /** Moves a carried Sparkie to wherever its captor is. */
+  placeCarried(index: number, x: number, y: number, z: number): void {
+    const f = this.followers[index];
+    if (!f) return;
+    f.x = x;
+    f.z = z;
+    f.y = y;
+    f.model.root.position.set(x, y, z);
+  }
+
+  /** Permanently removes a stolen Sparkie. */
+  removeFollower(index: number): void {
+    const f = this.followers[index];
+    if (!f) return;
+    f.model.root.visible = false;
+    this.sparkiePool.push(f.model);
+    this.followers.splice(index, 1);
+  }
+
+  get followerCount(): number {
+    return this.followers.length;
+  }
+
   /** Makes every rescued Sparkie celebrate (stage clear, victory). */
   cheer(): void {
     for (const f of this.followers) f.model.setMood('cheer');
@@ -430,6 +600,10 @@ export class SparkiePods {
       const locks = p.obj.userData.locks as THREE.Mesh[] | undefined;
       if (locks) for (const l of locks) l.scale.setScalar(1);
       this.podPool.push(p.obj);
+      p.beacon.visible = false;
+      p.chevron.visible = false;
+      p.ring.visible = false;
+      this.markerPool.push({ beacon: p.beacon, chevron: p.chevron, ring: p.ring });
       p.sparkie.root.visible = false;
       this.sparkiePool.push(p.sparkie);
     }
@@ -521,34 +695,25 @@ export class Crates {
 // Enemies
 // ===========================================================================
 
-/**
- * Per-kind tuning. `CFG.enemies` is a `const` object, so indexing it by a
- * union of kinds loses the fields that only some kinds have; this view gives
- * them back as optionals without weakening the source of truth.
- */
-interface EnemyCfg {
-  hp: number; speed: number; damage: number; score: number;
-  radius: number; hover: number;
-  chargeSpeed?: number; beamRange?: number; blastRadius?: number;
-}
-const ECFG = CFG.enemies as unknown as Record<EnemyKind, EnemyCfg>;
+/** Per-kind tuning for the whole roster, originals and Swarm-mode additions. */
+const ECFG = ENEMY_CFG;
 
 export interface EnemyHitEvent {
   x: number; y: number; z: number;
-  kind: EnemyKind;
+  kind: AnyEnemyKind;
   killed: boolean;
   shieldBroken: boolean;
 }
 
 export interface EnemyAttackEvent {
   x: number; z: number;
-  kind: EnemyKind;
+  kind: AnyEnemyKind;
   /** Explosive attacks damage in a radius; contact attacks are point hits. */
   radius: number;
 }
 
 interface Enemy {
-  kind: EnemyKind;
+  kind: AnyEnemyKind;
   model: EnemyModel;
   x: number; z: number;
   vx: number; vz: number;
@@ -563,6 +728,13 @@ interface Enemy {
   /** Direction locked in at the start of a charge/beam. */
   dirX: number; dirZ: number;
   shielded: boolean;
+  /** Warden aura is granting this enemy temporary damage resistance. */
+  warded: boolean;
+  /** Snatcher: index of the Sparkie it has grabbed, or -1. */
+  carrying: number;
+  /** Splitter: how many generations down this pod is (0 = original). */
+  generation: number;
+  scale: number;
   alive: boolean;
   spawnT: number;
   /** Ground telegraph decal, shown during wind-ups. */
@@ -570,17 +742,49 @@ interface Enemy {
   beam: THREE.Mesh | null;
   /** Blob shadow, so the player can read where a hovering drone actually is. */
   shadow: THREE.Mesh;
+  /** Pulsing magenta ring — the "this one is hostile" tell. */
+  marker: THREE.Mesh;
 }
 
 export class Enemies {
   readonly root = new THREE.Group();
   private list: Enemy[] = [];
-  private pools: Partial<Record<EnemyKind, EnemyModel[]>> = {};
-  private bursts: Array<{ fx: ReturnType<typeof createScrapBurst> }> = [];
+  private pools: Partial<Record<AnyEnemyKind, EnemyModel[]>> = {};
+  private bursts: Array<{ fx: ReturnType<typeof buildScrapBurst> }> = [];
   private decalPool: THREE.Mesh[] = [];
   private beamPool: THREE.Mesh[] = [];
   private shadowPool: THREE.Mesh[] = [];
+  private markerPool: THREE.Mesh[] = [];
   private time = 0;
+
+  /**
+   * In Swarm mode most drones ignore Rivet and march on the repair pad. Set
+   * this and `padRadius` and anything with `targetsPad` will path to it,
+   * attacking whatever gets in the way.
+   */
+  padTarget: { x: number; z: number; radius: number } | null = null;
+  /** Called when a pad-seeking enemy reaches the pad and attacks it. */
+  onPadAttack: ((x: number, z: number, damage: number) => void) | null = null;
+  /** Called when a lobber's shell lands. */
+  onShell: ((x: number, z: number, radius: number) => void) | null = null;
+  /** Snatcher wants to grab a Sparkie; return an index or -1. */
+  requestSparkie: ((x: number, z: number) => number) | null = null;
+  /** Snatcher escaped the arena with Sparkie #index. */
+  onSparkieStolen: ((index: number) => void) | null = null;
+  /** Snatcher was destroyed while carrying Sparkie #index. */
+  onSparkieDropped: ((index: number, x: number, z: number) => void) | null = null;
+  /** Snatcher just clamped onto Sparkie #index. */
+  onSparkieGrabbed: ((index: number) => void) | null = null;
+  /** Per-frame position of a Sparkie being carried. */
+  onCarryUpdate: ((index: number, x: number, y: number, z: number) => void) | null = null;
+  /** Current world position of rescued Sparkie #index, or null if it's gone. */
+  sparkieAt: ((index: number) => { x: number; z: number } | null) | null = null;
+  /** Radius past which a fleeing snatcher counts as having escaped. */
+  escapeRadius = 34;
+  /** Nearest player-built obstacle to chew through on the way to the pad. */
+  blockingLookup: ((x: number, z: number, maxDist: number) => { x: number; z: number } | null) | null = null;
+  /** Called when a pad-seeker is attacking a player-built gadget. */
+  onGadgetAttack: ((x: number, z: number, damage: number, dt: number) => void) | null = null;
 
   get count(): number {
     return this.list.length;
@@ -592,11 +796,11 @@ export class Enemies {
     return n;
   }
 
-  spawn(kind: EnemyKind, x: number, z: number): void {
+  spawn(kind: AnyEnemyKind, x: number, z: number): void {
     const pool = (this.pools[kind] ??= []);
     let model = pool.pop();
     if (!model) {
-      model = createEnemy(kind);
+      model = buildEnemyModel(kind);
       this.root.add(model.root);
     }
     model.root.visible = true;
@@ -613,11 +817,16 @@ export class Enemies {
       phase: Math.random() * 6.28,
       dirX: 0, dirZ: 1,
       shielded: kind === 'shieldbot',
+      warded: false,
+      carrying: -1,
+      generation: 0,
+      scale: 1,
       alive: true,
       spawnT: 0,
       decal: null,
       beam: null,
       shadow: this.acquireShadow(),
+      marker: this.acquireMarker(),
     });
   }
 
@@ -648,6 +857,32 @@ export class Enemies {
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.y = 0.03;
     mesh.renderOrder = 2;
+    this.root.add(mesh);
+    return mesh;
+  }
+
+  /**
+   * Every hostile machine gets a pulsing magenta ring on the ground beneath it.
+   *
+   * Colour alone was not enough at the game's camera distance — players were
+   * mistaking drones for the Sparkies they were meant to rescue. The ring adds
+   * a second channel (a hard geometric shape that *pulses*, which nothing
+   * friendly does) and it sits on the ground plane, where the player is already
+   * looking to judge positions.
+   */
+  private acquireMarker(): THREE.Mesh {
+    const m = this.markerPool.pop();
+    if (m) {
+      m.visible = true;
+      return m;
+    }
+    const mesh = new THREE.Mesh(
+      new THREE.RingGeometry(0.74, 1, 20),
+      glowMat(PAL.droneTrim, 0.6, true),
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = 0.05;
+    mesh.renderOrder = 3;
     this.root.add(mesh);
     return mesh;
   }
@@ -706,7 +941,7 @@ export class Enemies {
     obstacles: Array<{ x: number; z: number; r: number }>,
     fx: Fx,
     attacks: EnemyAttackEvent[],
-    onTelegraph: (kind: EnemyKind, x: number, z: number) => void,
+    onTelegraph: (kind: AnyEnemyKind, x: number, z: number) => void,
   ): void {
     this.time += dt;
 
@@ -719,6 +954,8 @@ export class Enemies {
         this.releaseBeam(e);
         e.shadow.visible = false;
         this.shadowPool.push(e.shadow);
+        e.marker.visible = false;
+        this.markerPool.push(e.marker);
         e.model.root.visible = false;
         (this.pools[e.kind] ??= []).push(e.model);
         swapRemove(this.list, i);
@@ -726,11 +963,34 @@ export class Enemies {
       }
 
       e.spawnT = Math.min(1, e.spawnT + dt * 3.4);
-      e.model.root.scale.setScalar(e.spawnT < 1 ? 0.2 + e.spawnT * 0.8 : 1);
+      const grow = e.spawnT < 1 ? 0.2 + e.spawnT * 0.8 : 1;
+      e.model.root.scale.setScalar(grow * e.scale);
       if (e.hitFlash > 0) e.hitFlash -= dt;
 
-      const dx = px - e.x;
-      const dz = pz - e.z;
+      // Swarm mode: most drones march on the repair pad and only bother with
+      // Rivet if he gets in the way. Redirecting the "toward the target" vector
+      // here means every existing behaviour works unchanged against either
+      // target, instead of each one needing a swarm branch.
+      let aimX = px;
+      let aimZ = pz;
+      let chewing = false;
+      const pad = this.padTarget;
+      if (pad && ECFG[e.kind].targetsPad && e.carrying < 0) {
+        const toPlayer = Math.hypot(px - e.x, pz - e.z);
+        if (toPlayer > 5.5) {
+          const blocker = this.blockingLookup?.(e.x, e.z, 4.5) ?? null;
+          if (blocker) {
+            aimX = blocker.x;
+            aimZ = blocker.z;
+            chewing = true;
+          } else {
+            aimX = pad.x;
+            aimZ = pad.z;
+          }
+        }
+      }
+      const dx = aimX - e.x;
+      const dz = aimZ - e.z;
       const dist = Math.hypot(dx, dz) || 1;
       const nx = dx / dist;
       const nz = dz / dist;
@@ -802,11 +1062,36 @@ export class Enemies {
         }
       }
 
+      // Chew through whatever the player built in the way. Without this the
+      // defences are permanent and Swarm mode becomes a screensaver after the
+      // first few turrets go down.
+      if (chewing && e.stun <= 0 && e.spawnT >= 1) {
+        const reach = ECFG[e.kind].radius + 1.5;
+        if ((aimX - e.x) ** 2 + (aimZ - e.z) ** 2 < reach * reach) {
+          this.onGadgetAttack?.(aimX, aimZ, ECFG[e.kind].damage, dt);
+        }
+      }
+
+      // A carried Sparkie rides in the snatcher's claw.
+      if (e.kind === 'snatcher' && e.carrying >= 0) {
+        const claw = e.model.root.userData.claw as THREE.Object3D | undefined;
+        if (claw) {
+          claw.getWorldPosition(_clawPos);
+          this.onCarryUpdate?.(e.carrying, _clawPos.x, _clawPos.y, _clawPos.z);
+        }
+      }
+
       // Pose + transform.
       const intensity = e.state === 'telegraph' && e.timer > 0
         ? 1 - clamp01(e.timer / (e.kind === 'zapper' ? 1.1 : e.kind === 'bomblet' ? 0.95 : 0.62))
         : e.state === 'attack' ? 1 : clamp01(Math.hypot(e.vx, e.vz) / (cfg.speed || 1));
-      e.model.root.position.set(e.x, cfg.hover + Math.sin(this.time * 2.2 + e.phase) * 0.09, e.z);
+      // Enemy models build upward from y = 0 and carry their own hover height
+      // and bob internally (see the header of Enemies.ts). Lifting the root by
+      // `cfg.hover` as well double-applied it, leaving flyers at roughly twice
+      // their intended altitude and the ground-standing zapper hovering a metre
+      // in the air. `cfg.hover` is now only a *visual centre* used for spawning
+      // effects at chest height.
+      e.model.root.position.set(e.x, 0, e.z);
       const faceDir = e.state === 'attack' || e.state === 'telegraph'
         ? Math.atan2(e.dirX, -e.dirZ)
         : Math.atan2(nx, -nz);
@@ -818,6 +1103,17 @@ export class Enemies {
       e.shadow.scale.set(size, size, 1);
       (e.shadow.material as THREE.MeshBasicMaterial).opacity =
         0.3 * e.spawnT * (1 - Math.min(0.5, (ECFG[e.kind].hover - 0.8) * 0.3));
+
+      // Hostile ring. It beats faster while the enemy is winding up an attack,
+      // so the ground tells you both *what* it is and *when* it is dangerous.
+      const beat = e.state === 'telegraph' || e.state === 'attack' ? 9 : 3.2;
+      const pulse = 0.5 + Math.sin(this.time * beat + e.phase) * 0.5;
+      const mSize = ECFG[e.kind].radius * (2.05 + pulse * 0.3);
+      e.marker.position.set(e.x, 0.05, e.z);
+      e.marker.scale.set(mSize, mSize, 1);
+      const mMat = e.marker.material as THREE.MeshBasicMaterial;
+      mMat.opacity = e.spawnT * (e.stun > 0 ? 0.2 : 0.35 + pulse * 0.3);
+      mMat.color.setHex(e.stun > 0 ? PAL.metalMid : e.shielded ? PAL.shield : PAL.droneTrim);
 
       // Telegraph decal follows the wind-up.
       if (e.decal) {
@@ -846,7 +1142,7 @@ export class Enemies {
     dt: number,
     nx: number, nz: number, dist: number,
     attacks: EnemyAttackEvent[],
-    onTelegraph: (kind: EnemyKind, x: number, z: number) => void,
+    onTelegraph: (kind: AnyEnemyKind, x: number, z: number) => void,
     fx: Fx,
   ): void {
     switch (e.kind) {
@@ -994,6 +1290,137 @@ export class Enemies {
         break;
       }
 
+      case 'skitter': {
+        // Fast, fragile, and moves in erratic bursts rather than a smooth line,
+        // so a crowd of them reads as a scuttling swarm instead of a queue.
+        e.state = 'chase';
+        const burst = 0.55 + Math.sin(this.time * 6 + e.phase * 3) * 0.45;
+        const jitter = Math.sin(this.time * 11 + e.phase) * 0.35;
+        const tx = nx + -nz * jitter;
+        const tz = nz + nx * jitter;
+        const m = Math.hypot(tx, tz) || 1;
+        e.vx = damp(e.vx, (tx / m) * cfg.speed * burst, 9, dt);
+        e.vz = damp(e.vz, (tz / m) * cfg.speed * burst, 9, dt);
+        break;
+      }
+
+      case 'lobber': {
+        // Stationary artillery. The shell is telegraphed by a ground circle for
+        // its whole flight, so this enemy only ever punishes standing still.
+        e.vx = 0;
+        e.vz = 0;
+        if (e.state === 'telegraph') {
+          if (e.timer <= 0) {
+            e.state = 'attack';
+            e.timer = 0.45;
+            const range = Math.min(dist, 20);
+            const tx = e.x + e.dirX * range;
+            const tz = e.z + e.dirZ * range;
+            this.onShell?.(tx, tz, cfg.shellRadius ?? 3.2);
+            this.releaseDecal(e);
+            fx.burst('smoke', e.x, 1.1, e.z, {
+              count: 8, color: 0xcbd2e8, speed: 5, size: 0.5, life: 0.45,
+              dirX: e.dirX, dirY: 0.4, dirZ: e.dirZ, focus: 0.7,
+            });
+          }
+        } else if (e.state === 'attack') {
+          if (e.timer <= 0) {
+            e.state = 'idle';
+            e.cooldown = 2.6;
+          }
+        } else {
+          e.state = 'idle';
+          if (e.cooldown <= 0 && dist < 22 && dist > 4) {
+            e.state = 'telegraph';
+            e.timer = cfg.shellTime ?? 1.35;
+            e.dirX = nx;
+            e.dirZ = nz;
+            e.decal = this.acquireDecal();
+            (e.decal.material as THREE.MeshBasicMaterial).color.setHex(PAL.hazard);
+            onTelegraph('lobber', e.x, e.z);
+          }
+        }
+        if (e.state === 'telegraph' && e.decal) {
+          // The marker sits on the impact point, not on the lobber.
+          const range = Math.min(dist, 20);
+          e.decal.position.set(e.x + e.dirX * range, 0.05, e.z + e.dirZ * range);
+          const grow = 1 - clamp01(e.timer / (cfg.shellTime ?? 1.35));
+          const r = (cfg.shellRadius ?? 3.2) * (0.55 + grow * 0.45);
+          e.decal.scale.set(r, r, 1);
+        }
+        break;
+      }
+
+      case 'splitter': {
+        // Slow and heavy. The danger isn't the pod, it's what it leaves behind.
+        e.state = 'chase';
+        e.vx = damp(e.vx, nx * cfg.speed, 2, dt);
+        e.vz = damp(e.vz, nz * cfg.speed, 2, dt);
+        break;
+      }
+
+      case 'snatcher': {
+        // The thief. Goes for a Sparkie, grabs it, then runs for the rim. If it
+        // escapes you lose that Sparkie for good, which is what gives Swarm
+        // mode its urgency.
+        if (e.carrying >= 0) {
+          // Fleeing: head for the nearest edge.
+          const d = Math.hypot(e.x, e.z) || 1;
+          e.state = 'attack';
+          e.vx = damp(e.vx, (e.x / d) * cfg.speed * 1.25, 3, dt);
+          e.vz = damp(e.vz, (e.z / d) * cfg.speed * 1.25, 3, dt);
+          if (d > this.escapeRadius) {
+            this.onSparkieStolen?.(e.carrying);
+            e.carrying = -1;
+            e.alive = false;
+          }
+        } else {
+          e.state = 'chase';
+          const idx = this.requestSparkie?.(e.x, e.z) ?? -1;
+          if (idx >= 0 && this.sparkieAt) {
+            const target = this.sparkieAt(idx);
+            if (target) {
+              const gx = target.x - e.x;
+              const gz = target.z - e.z;
+              const gd = Math.hypot(gx, gz) || 1;
+              e.vx = damp(e.vx, (gx / gd) * cfg.speed, 4, dt);
+              e.vz = damp(e.vz, (gz / gd) * cfg.speed, 4, dt);
+              if (gd < 1.5) {
+                e.carrying = idx;
+                this.onSparkieGrabbed?.(idx);
+                fx.burst('spark', e.x, cfg.hover, e.z, {
+                  count: 12, color: PAL.droneTrim, speed: 7, size: 0.3, life: 0.3,
+                });
+              }
+              break;
+            }
+          }
+          // Nothing to steal — harass the player instead.
+          e.vx = damp(e.vx, nx * cfg.speed * 0.8, 3, dt);
+          e.vz = damp(e.vz, nz * cfg.speed * 0.8, 3, dt);
+        }
+        break;
+      }
+
+      case 'warden': {
+        // Support. Hangs back and shields its friends; the aura visual is
+        // scaled to exactly the radius that actually protects them.
+        e.state = 'chase';
+        const stand = 9;
+        const push = dist < stand ? -1 : 1;
+        e.vx = damp(e.vx, nx * cfg.speed * push, 2, dt);
+        e.vz = damp(e.vz, nz * cfg.speed * push, 2, dt);
+        const aura = e.model.root.userData.aura as THREE.Object3D | undefined;
+        if (aura) {
+          const r = cfg.auraRadius ?? 7.5;
+          // Squashed on Y: a full hemisphere at this radius occludes a third of
+          // the screen, which is unacceptable for a support unit the player is
+          // supposed to see *past* in order to fight everything it's shielding.
+          aura.scale.set(r, r * 0.22, r);
+        }
+        break;
+      }
+
       case 'shieldbot': {
         // Advances steadily behind its shield. Zaps bounce off the front, so
         // the player has to dash it (breaking the shield) or get behind it.
@@ -1007,6 +1434,20 @@ export class Enemies {
         break;
       }
     }
+  }
+
+  /** Spawns a smaller copy of a splitter next to its parent. */
+  private spawnChild(parent: Enemy, ox: number, oz: number): void {
+    const scale = ECFG[parent.kind].childScale ?? 0.6;
+    this.spawn(parent.kind, parent.x + ox, parent.z + oz);
+    const child = this.list[this.list.length - 1];
+    if (!child) return;
+    child.generation = parent.generation + 1;
+    child.scale = parent.scale * scale;
+    child.hp = Math.max(1, Math.round(ECFG[parent.kind].hp * scale));
+    child.spawnT = 0.5;
+    child.vx = ox * 3;
+    child.vz = oz * 3;
   }
 
   private explode(e: Enemy, fx: Fx): void {
@@ -1024,7 +1465,7 @@ export class Enemies {
   }
 
   private spawnScrap(e: Enemy): void {
-    const burst = createScrapBurst(e.kind);
+    const burst = buildScrapBurst(e.kind);
     burst.root.position.set(e.x, ECFG[e.kind].hover, e.z);
     this.root.add(burst.root);
     this.bursts.push({ fx: burst });
@@ -1105,6 +1546,18 @@ export class Enemies {
 
     const killed = e.hp <= 0;
     if (killed) {
+      if (e.carrying >= 0) {
+        this.onSparkieDropped?.(e.carrying, e.x, e.z);
+        e.carrying = -1;
+      }
+      // A splitter breaks into smaller copies rather than simply dying.
+      const splitInto = ECFG[e.kind].splitInto ?? 0;
+      if (splitInto > 0 && e.generation < 1) {
+        for (let k = 0; k < splitInto; k++) {
+          const a = (k / splitInto) * Math.PI * 2 + Math.random();
+          this.spawnChild(e, Math.cos(a) * 1.3, Math.sin(a) * 1.3);
+        }
+      }
       e.alive = false;
       this.spawnScrap(e);
       fx.burst('glow', e.x, cfg.hover, e.z, {
@@ -1142,7 +1595,7 @@ export class Enemies {
   }
 
   /** Everything alive, for the boss fight's cleanup and the HUD counter. */
-  forEachAlive(fn: (x: number, z: number, kind: EnemyKind) => void): void {
+  forEachAlive(fn: (x: number, z: number, kind: AnyEnemyKind) => void): void {
     for (const e of this.list) if (e.alive) fn(e.x, e.z, e.kind);
   }
 
@@ -1165,6 +1618,8 @@ export class Enemies {
       this.releaseBeam(e);
       e.shadow.visible = false;
       this.shadowPool.push(e.shadow);
+      e.marker.visible = false;
+      this.markerPool.push(e.marker);
       e.model.root.visible = false;
       (this.pools[e.kind] ??= []).push(e.model);
     }
@@ -1204,5 +1659,9 @@ export interface EnemyRef {
   index: number;
   model: EnemyModel;
   x: number; y: number; z: number;
-  kind: EnemyKind;
+  kind: AnyEnemyKind;
 }
+
+const _homeTmp = new THREE.Vector3();
+
+const _clawPos = new THREE.Vector3();

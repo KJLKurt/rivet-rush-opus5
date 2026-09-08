@@ -166,6 +166,7 @@ function showFatal(err: unknown): void {
  * console or from Playwright without ever showing a debug button to a player.
  */
 function exposeDevHooks(game: Game, bot: PlaytestBot): void {
+  (window as unknown as Record<string, unknown>).__rivetAudio = audio;
   (window as unknown as Record<string, unknown>).__rivet = {
     game,
     bot,
@@ -173,6 +174,20 @@ function exposeDevHooks(game: Game, bot: PlaytestBot): void {
     autoplay: (on = true) => bot.setEnabled(on),
     skipTo: (stageIndex: number) => bot.skipTo(stageIndex),
     state: () => game.state,
+    /** Spawns one enemy of any kind — used by the model line-up check. */
+    spawnEnemy: (kind: string, x: number, z: number) =>
+      game.enemiesRef.spawn(kind as never, x, z),
+    freezeCamera: (x: number, y: number, z: number, lx = 0, lz = 0) => {
+      const g = game as unknown as { render: (dt: number) => void; __orig?: (dt: number) => void };
+      g.__orig ??= g.render.bind(game);
+      g.render = (dt: number) => {
+        const c = game.renderer.camera;
+        c.position.set(x, y, z);
+        c.lookAt(lx, 1, lz);
+        c.updateMatrixWorld();
+        g.__orig!(dt);
+      };
+    },
     profile: () => save.profile,
   };
 }

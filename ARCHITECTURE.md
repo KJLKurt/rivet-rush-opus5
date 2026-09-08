@@ -23,18 +23,22 @@ src/
     Palette.ts        colours and per-area lighting themes
     Textures.ts       every texture, drawn procedurally into a canvas and cached
     Materials.ts      toon material factory, inverted-hull outlines, rounded-box geometry
-    models/           Rivet, Sparkie, Enemies, Boss, Props — all built from primitives
+    models/           Rivet, Sparkie, Enemies, EnemiesExtra, Boss, Props,
+                      Deployables — all built from primitives
   game/               rules and content
-    Game.ts           the orchestrator and state machine
+    Game.ts           the orchestrator and state machine (both modes)
     Config.ts         every tuning number, in one place
     Player.ts         movement, dash, magnet, health, Overdrive
     Entities.ts       collectibles, rescue pods, crates, enemy AI
+    EnemyTypes.ts     the unified 10-enemy roster and its tuning table
     BossFight.ts      the Great Scrapbot's state machine
+    Swarm.ts          Swarm mode: wave director, repair pad, escort
+    Gadgets.ts        deployable turrets/walls/bombs/shockers/beacons
     Arena.ts          per-stage island generation and prop placement
     Stages.ts         the run: six stages plus the finale
     Upgrades.ts       upgrade definitions and the weighted draft
     Progression.ts    achievements, cosmetics, daily challenge
-    Bot.ts            the automated playtest player
+    Bot.ts            the automated playtest player (plays both modes)
   ui/                 the DOM layer
     UI.ts             every screen, the HUD, world-space score popups
     Icons.ts          the icon set as inline SVG paths
@@ -42,6 +46,8 @@ scripts/
   generate-icons.mjs      draws the PWA icon set (build step)
   capture-screenshots.mjs captures the manifest screenshots from real gameplay
   playtest.mjs            headless full-run regression test
+  audio-check.mjs         proves every SFX and track produces real output
+  check-subpath.mjs       GitHub Pages subpath / service-worker check
 ```
 
 ## The three layers
@@ -70,6 +76,30 @@ what makes the game feel right on a 120 Hz phone.
 few-frame freeze on a dash, a kill, or a boss hit. Camera shake, particles and the
 interface keep running on the real delta so the freeze reads as impact rather than
 as a stall.
+
+## Two modes, one engine
+
+`Game.mode` is `'story'` or `'swarm'`. Both use the same player, arena,
+collectibles, enemies, particles and camera; only the **objective layer**
+differs. Story mode runs `Stages.ts` and a portal; Swarm mode runs
+`SwarmDirector` and a repair pad. Enemy AI didn't need a swarm branch at all —
+`Enemies.padTarget` simply redirects the "toward the target" vector before
+`think()` runs, so every existing behaviour works unchanged against either
+target.
+
+## The camera
+
+`CameraRig` blends between two presets: `chase` (~35°, closer, the default) and
+`wide` (~43°, the original overhead). Switching eases over ~0.3s rather than
+cutting. The boss arena forces `wide` regardless of the setting, because its
+attacks come from off-screen.
+
+The focus point is a spring integrated in **fixed 1/120s sub-steps with
+exponential damping**. The obvious explicit-Euler form is unstable once
+`damping * dt` exceeds 1 — at 15fps that term reaches 1.03, the velocity flips
+sign every frame, and the camera stops following the player entirely. It looked
+fine at 60fps and fell apart on exactly the weak devices that can least afford a
+broken camera.
 
 ## Rendering
 

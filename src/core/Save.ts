@@ -15,6 +15,8 @@ const MIRROR = 'rivet-rush:profile';
 const PROFILE_VERSION = 1;
 
 export type QualityLevel = 'auto' | 'low' | 'medium' | 'high';
+/** 'chase' rides closer and lower; 'wide' is the original overhead framing. */
+export type CameraSetting = 'chase' | 'wide';
 
 export interface Settings {
   master: number;
@@ -31,6 +33,8 @@ export interface Settings {
   leftHanded: boolean;
   /** Extra-large HUD text and controls. */
   bigUI: boolean;
+  /** Camera framing. The boss always forces 'wide' regardless. */
+  camera: CameraSetting;
 }
 
 export interface HighScore {
@@ -77,6 +81,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showFps: false,
   leftHanded: false,
   bigUI: false,
+  camera: 'chase',
 };
 
 export function defaultProfile(): Profile {
@@ -128,6 +133,7 @@ function migrate(raw: unknown): Profile {
   s.sfx = clampNum(s.sfx, 0, 1, base.settings.sfx);
   s.screenShake = clampNum(s.screenShake, 0, 1, base.settings.screenShake);
   if (!['auto', 'low', 'medium', 'high'].includes(s.quality)) s.quality = 'auto';
+  if (!['chase', 'wide'].includes(s.camera)) s.camera = 'chase';
   return merged;
 }
 

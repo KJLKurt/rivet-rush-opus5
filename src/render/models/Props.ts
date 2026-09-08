@@ -1250,7 +1250,7 @@ export function createBoltPickup(): THREE.Group {
   const core = new THREE.Mesh(gCyl(0.1, 0.1, 0.2, 6), glowMat(PAL.boltHot, 0.95, true));
   g.add(core);
   const halo = new THREE.Sprite(spriteMat('glowSprite', PAL.bolt, true));
-  halo.scale.setScalar(0.9);
+  halo.scale.setScalar(0.62);
   g.add(halo);
 
   g.userData.core = core;
@@ -1338,7 +1338,10 @@ export function createSparkiePod(): THREE.Group {
     g.add(lock);
     locks.push(lock);
   }
-  const glow = new THREE.Mesh(gCircle(0.85, 18), glowMat(PAL.droneTrim, 0.35, true));
+  // The pod's floor glow is CYAN, not magenta. Only the three small cage locks
+  // stay hostile-coloured. The big glowing shape is what the player sees from
+  // across the arena, and it has to say "come here", not "danger".
+  const glow = new THREE.Mesh(gCircle(0.85, 18), glowMat(PAL.sparkieGlow, 0.35, true));
   glow.position.y = 0.03;
   g.add(glow);
 

@@ -1,5 +1,6 @@
 import type { Game } from './Game';
 import { CFG } from './Config';
+import { GADGETS, GADGET_ORDER } from './Gadgets';
 import { clamp01 } from '../core/Util';
 
 /**
@@ -28,6 +29,7 @@ export class PlaytestBot {
   private lastZ = 0;
   private wanderAngle = 0;
   private threats: Array<{ x: number; z: number; inner: number; outer: number }> = [];
+  private buildCooldown = 0;
   private hazards: Array<{ x: number; z: number; r: number }> = [];
 
   constructor(game: Game) {
@@ -88,6 +90,28 @@ export class PlaytestBot {
 
     this.dashCooldown -= dt;
     this.repickTimer -= dt;
+    this.buildCooldown -= dt;
+
+    // --- Swarm mode: spend the bank and hold the pad ------------------------
+    const swarm = this.game.swarmDebug();
+    if (swarm) {
+      const bank = swarm.bank as number;
+      if (this.buildCooldown <= 0 && (swarm.gadgets as number) < 14) {
+        // Ring the pad with defences: stand a sensible distance out, then build
+        // whatever is affordable, favouring turrets.
+        const distFromPad = Math.hypot(px, pz);
+        if (distFromPad > 6.5 && distFromPad < 15) {
+          const affordable = GADGET_ORDER.filter((k) => bank >= GADGETS[k].cost);
+          if (affordable.length > 0) {
+            const pick = affordable.includes('turret') && bank >= 50
+              ? 'turret'
+              : affordable[affordable.length - 1]!;
+            this.game.placeGadget(pick);
+            this.buildCooldown = 1.4;
+          }
+        }
+      }
+    }
 
     // --- threat assessment -------------------------------------------------
     let threatX = 0;
@@ -215,6 +239,49 @@ export class PlaytestBot {
   }
 
   private pickTarget(px: number, pz: number): void {
+    // Swarm mode: free Sparkies when there are any, otherwise defend the pad by
+    // meeting whatever is closest to it.
+    const swarm = this.game.swarmDebug();
+    if (swarm) {
+      const pods = this.game.podsRef;
+      if (pods.remaining > 0 && (swarm.phase === 'build' || Math.random() < 0.5)) {
+        const pod = pods.nearestPod(px, pz);
+        if (pod) {
+          this.targetX = pod.x;
+          this.targetZ = pod.z;
+          return;
+        }
+      }
+      // Intercept the enemy closest to the pad.
+      let bx = 0;
+      let bz = 0;
+      let bestD = Infinity;
+      this.game.enemiesRef.forEachAlive((ex, ez) => {
+        const d = ex * ex + ez * ez;
+        if (d < bestD) {
+          bestD = d;
+          bx = ex;
+          bz = ez;
+        }
+      });
+      if (bestD < Infinity) {
+        this.targetX = bx;
+        this.targetZ = bz;
+        return;
+      }
+      const bolt = this.game.collectiblesRef.nearestTo(px, pz, 16);
+      if (bolt) {
+        this.targetX = bolt.x;
+        this.targetZ = bolt.z;
+        return;
+      }
+      // Hold a ring around the pad so it can build there.
+      const a = Math.atan2(pz, px) + 0.6;
+      this.targetX = Math.cos(a) * 10;
+      this.targetZ = Math.sin(a) * 10;
+      return;
+    }
+
     const boss = this.game.bossRef;
     if (boss) {
       if (boss.coreExposed) {

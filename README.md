@@ -8,8 +8,11 @@ chain of floating sky islands. Carve through the islands, magnet up every bolt y
 can reach, free the Sparkies, dodge the rogue drones, and go and have a word with
 the Great Scrapbot.
 
+- Two modes: **Adventure** (three areas, six stages, one boss — about 6–9
+  minutes) and **Swarm** (endless waves; rescue Sparkies to a repair pad and
+  defend it with turrets, walls, bombs, shockers and beacons).
 - One-thumb controls: a floating virtual stick and one enormous **DASH** button.
-- A full run is about 6–9 minutes: three areas, six stages, one boss.
+  Gadgets build where you're standing, so there's nothing to aim.
 - Works completely offline after the first load. No account, no ads, no purchases,
   no chat, no tracking, and nothing that leaves your device.
 
@@ -35,6 +38,8 @@ npm run dev        # http://localhost:5173
 | `npm run typecheck` | `tsc --noEmit` only. |
 | `npm run icons` | Regenerates the PWA icon set from `scripts/generate-icons.mjs`. |
 | `npm run playtest` | Runs the full automated playtest in headless Chromium (see below). |
+| `npm run check:audio` | Proves every sound effect and music track produces real audio output. |
+| `npm run check:pages` | Serves `dist/` under a subpath and verifies the PWA still installs and works offline. |
 | `npm run build:gh` | Production build with the base path set for a GitHub Pages project site. |
 
 ## Testing it for real
@@ -60,6 +65,7 @@ You can also drive the game by hand from the browser console:
 __rivet.play()          // start a run
 __rivet.autoplay(true)  // hand over to the bot
 __rivet.skipTo(6)       // jump straight to the boss
+__rivet.game.startSwarm()  // start Swarm mode
 __rivet.state()         // current game state
 ```
 
@@ -151,10 +157,12 @@ screen without forcing you to.
 | Dash | The big **DASH** button, or tap anywhere on the right half | `Space` / `Shift` / `J` | `A` / `RB` / `RT` |
 | Overdrive | The gold button (only appears when it's ready) | `E` / `K` / `Enter` | `X` / `LB` |
 | Pause | The pause button | `Esc` / `P` | `Start` |
+| Build a gadget (Swarm) | The item bar along the bottom | `1`–`5` | — |
 
 ## Accessibility
 
-In **Settings**: master / music / effects volume, screen-shake intensity, a
+In **Settings**: a **camera** toggle (Close / Wide), master / music / effects
+volume, screen-shake intensity, a
 **Calm mode** that cuts flashes and heavy effects, vibration toggle, a
 left-handed layout that mirrors the touch controls, bigger buttons, an FPS
 readout, and a graphics-quality override. Nothing important in the game is

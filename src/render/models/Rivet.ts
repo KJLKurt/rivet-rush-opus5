@@ -237,6 +237,15 @@ export class RivetModel {
     collar.scale.set(1, 1, 0.8);
     this.bodyPivot.add(collar);
 
+    // Bright back plate: a little tool harness across his shoulders. Purely so
+    // the rear three-quarter view has a strong warm accent to catch the eye.
+    const harness = new THREE.Mesh(roundedBoxGeometry(0.5, 0.2, 0.12, 0.05, 2), toonMat(PAL.goggleRim));
+    harness.position.set(0, 0.78, -0.24);
+    this.bodyPivot.add(harness);
+    const harnessStrap = new THREE.Mesh(roundedBoxGeometry(0.14, 0.42, 0.1, 0.04, 2), toonMat(PAL.scarfDark));
+    harnessStrap.position.set(0, 0.6, -0.26);
+    this.bodyPivot.add(harnessStrap);
+
     // Tool satchel on his hip — inventor detail.
     const satchel = new THREE.Mesh(roundedBoxGeometry(0.2, 0.22, 0.16, 0.06, 2), toonMat(PAL.woodDark));
     satchel.position.set(-0.34, 0.5, 0.02);
@@ -425,8 +434,10 @@ export class RivetModel {
 
   private buildTail(): void {
     const segLen = 0.27;
-    const darkMat = toonMat(PAL.furDark);
-    const lightMat = toonMat(PAL.furLight);
+    // High-contrast tail rings. The chase camera spends the whole game looking
+    // at Rivet's back, and the tail is the largest thing on it.
+    const darkMat = toonMat(0x424b6b);
+    const lightMat = toonMat(0xf0f4ff);
     this.tail = this.makeChain(this.bodyPivot, 5, new THREE.Vector3(0, 0.5, -0.26), (i) => {
       const g = new THREE.Group();
       const r = 0.21 - i * 0.018;

@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Rivet Rush: Sky Salvage — an original family-friendly 3D arcade rescue game and installable PWA.",
+  "description": "Rivet Rush: Sky Salvage \u2014 an original family-friendly 3D arcade rescue game and installable PWA.",
   "license": "MIT",
   "engines": {
     "node": ">=24"
@@ -16,7 +16,9 @@
     "preview": "vite preview --port 4173 --host",
     "icons": "node scripts/generate-icons.mjs",
     "typecheck": "tsc --noEmit",
-    "playtest": "node scripts/playtest.mjs"
+    "playtest": "node scripts/playtest.mjs",
+    "check:audio": "node scripts/audio-check.mjs",
+    "check:pages": "node scripts/check-subpath.mjs"
   },
   "dependencies": {
     "three": "0.185.1"
