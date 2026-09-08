@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b1030" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Ride a magnetic hoverboard through floating sky islands, rescue the Sparkies and out-run the Great Scrapbot. A free, offline-playable arcade game for all ages."
+    />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Rivet Rush" />
+    <link rel="icon" href="icons/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <title>Rivet Rush: Sky Salvage</title>
+  </head>
+  <body>
+    <!--
+      The boot screen is inlined so something appealing is on screen before any
+      JavaScript has parsed. It is removed once the game reports ready.
+    -->
+    <div id="boot">
+      <div class="boot-logo" aria-hidden="true">
+        <span class="boot-bolt"></span>
+      </div>
+      <h1 class="boot-title">RIVET RUSH</h1>
+      <p class="boot-sub">SKY SALVAGE</p>
+      <div class="boot-bar"><i id="boot-fill"></i></div>
+      <p class="boot-status" id="boot-status">Warming up the hoverboard…</p>
+      <noscript>
+        <p class="boot-status">This game needs JavaScript enabled to run.</p>
+      </noscript>
+    </div>
+
+    <canvas id="game" aria-label="Rivet Rush game view" role="img"></canvas>
+    <div id="ui" aria-live="polite"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

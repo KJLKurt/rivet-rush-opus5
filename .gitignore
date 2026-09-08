@@ -1,0 +1,7 @@
+node_modules/
+dist/
+dev-dist/
+playtest-shots/
+playtest-report.json
+.DS_Store
+*.log
