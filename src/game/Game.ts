@@ -226,6 +226,8 @@ export class Game {
   private zapPool: THREE.Mesh[] = [];
   private zapRoot = new THREE.Group();
 
+  /** Test-only raw stick override, applied before the input corrections. */
+  forceStick: { x: number; y: number } | null = null;
   /** Set by the automated playtest bot; overrides human input when present. */
   botInput: { x: number; y: number; dash: boolean; overdrive: boolean } | null = null;
 
@@ -344,6 +346,23 @@ export class Game {
     this.hooks.onState(s);
   }
 
+  /** True when the player has chosen the gentler ruleset. */
+  private get relaxed(): boolean {
+    return save.profile.settings.difficulty === 'relaxed';
+  }
+
+  /**
+   * Relaxed mode. Deliberately expressed as a handful of readable multipliers
+   * rather than a separate tuning table, so there is only ever one set of
+   * numbers to reason about.
+   */
+  private applyDifficulty(): void {
+    if (!this.relaxed) return;
+    this.stats.maxHearts += 2;
+    this.stats.shields += 1;
+    this.stats.dashRecharge *= 0.8;
+  }
+
   private freshRun(daily: boolean): RunState {
     const seed = daily ? hashString(localDateKey()) : (Math.random() * 0xffffffff) >>> 0;
     return {
@@ -368,6 +387,7 @@ export class Game {
     this.clearTitleScene();
     this.run = this.freshRun(false);
     this.stats = baseStats();
+    this.applyDifficulty();
     this.dailyMods = [];
     save.update((p) => {
       p.runsStarted += 1;
@@ -450,7 +470,7 @@ export class Game {
     const spawn = { x: 0, z: swarm.padRadius + 4 };
     this.player!.resetForStage(spawn.x, spawn.z);
     this.player!.refreshStats();
-    this.rig.snapTo(spawn.x, spawn.z);
+    this.rig.snapTo(spawn.x, spawn.z, this.player!.facing);
     this.applyCameraMode(true);
 
     this.hud.mode = 'swarm';
@@ -471,15 +491,18 @@ export class Game {
       this.fx.shockwave(x, 0.06, z, 0.3, 3, 0.35, PAL.droneShell, 0.6);
     };
     swarm.onWaveStart = (wave) => {
-      audio.play('bossPhase', { gain: 0.6, pitch: 1.1 });
-      this.hooks.onToast(`Wave ${wave}!`, 'warn', 2000);
-      this.hooks.onFlash('#ff5ec4', 200);
+      this.enemies.hpScale = swarm.hpScale;
+      const elite = swarm.isEliteWave(wave);
+      audio.play(elite ? 'bossIntro' : 'bossPhase', { gain: elite ? 0.9 : 0.6, pitch: 1.1 });
+      this.hooks.onToast(elite ? `BIG WAVE ${wave}!` : `Wave ${wave}!`, 'warn', elite ? 2600 : 2000);
+      this.hooks.onFlash(elite ? '#ff2d5e' : '#ff5ec4', elite ? 340 : 200);
+      if (elite) this.rig.addTrauma(0.5);
     };
     swarm.onWaveClear = (wave) => {
       audio.play('victory', { gain: 0.5 });
       this.hooks.onToast(`Wave ${wave} cleared!`, 'star', 2200);
       // A clear pays out, so building up is always affordable.
-      swarm.addBank(40 + wave * 18);
+      swarm.addBank(30 + wave * 6);
       this.spawnSwarmPods(1 + Math.floor(wave / 2));
     };
     swarm.onPadHit = (frac) => {
@@ -522,6 +545,7 @@ export class Game {
     this.clearTitleScene();
     this.run = this.freshRun(daily);
     this.stats = baseStats();
+    this.applyDifficulty();
     this.dailyMods = daily ? dailyModifiers(this.run.seed) : [];
     for (const mod of this.dailyMods) this.applyDailyModifier(mod.id);
 
@@ -631,7 +655,7 @@ export class Game {
 
     // Boss stage.
     if (stage.area === 'finale') {
-      this.boss = new BossFight();
+      this.boss = new BossFight(this.relaxed);
       this.scene.add(this.boss.root);
       this.boss.begin();
       this.boss.onSpawnMinions = (count) => {
@@ -684,6 +708,7 @@ export class Game {
   }
 
   private teardownStage(): void {
+    this.enemies.hpScale = 1;
     if (this.swarm) {
       this.scene.remove(this.swarm.root);
       this.swarm.dispose();
@@ -850,8 +875,58 @@ export class Game {
     let inX = input.moveX;
     let inZ = input.moveY;
     let mag = input.moveMag;
+    // Test hook: injects a raw stick value through the *human* correction path,
+    // so the control-mapping check measures the real pipeline.
+    if (this.forceStick) {
+      inX = this.forceStick.x;
+      inZ = this.forceStick.y;
+      mag = Math.min(1, Math.hypot(inX, inZ));
+    }
     let wantDash = input.consume('dash');
     let wantOverdrive = input.consume('overdrive');
+
+    // --- making the stick agree with your eyes ------------------------------
+    //
+    // Two corrections, both applied to the *human* stick only. The playtest bot
+    // reasons in world space and would spiral if its intentions were rewritten.
+    if (mag > 0.001) {
+      // 1. Perspective correction. A three-quarter camera foreshortens the
+      //    world's forward axis: at a 35° pitch, one metre "north" only moves
+      //    you sin(35°) ≈ 0.57 of a metre up the screen, while one metre "east"
+      //    moves a full metre across it. Feed the stick straight through and a
+      //    45° push visibly travels at about 30° — the character does not go
+      //    where you pointed. Dividing the forward component by sin(pitch)
+      //    restores the match. This is why the shallower CLOSE camera felt
+      //    wrong while the near-top-down WIDE camera felt fine.
+      //
+      //    Only world-aligned cameras need it. In an over-the-shoulder or first
+      //    person view "forward" is into the screen, so there is nothing to
+      //    foreshorten, and the correction is faded out by `worldAligned`.
+      const align = this.rig.worldAligned;
+      if (align > 0.001) {
+        const comp = 1 / Math.max(0.45, this.rig.pitchSin);
+        const cz = inZ * (1 + (comp - 1) * align);
+        const m = Math.hypot(inX, cz);
+        if (m > 1e-4) {
+          const k = mag / m;
+          inX = inX * k;
+          inZ = cz * k;
+        }
+      }
+
+      // 2. Camera-relative steering for the orbiting presets, or "push up"
+      //    would mean "go north" while the camera happens to look east.
+      const camYaw = this.rig.inputYaw;
+      if (camYaw !== 0) {
+        const sinY = Math.sin(camYaw);
+        const cosY = Math.cos(camYaw);
+        const rx = inX * cosY + inZ * sinY;
+        const rz = -inX * sinY + inZ * cosY;
+        inX = rx;
+        inZ = rz;
+      }
+    }
+
     if (this.botInput) {
       inX = this.botInput.x;
       inZ = this.botInput.y;
@@ -916,7 +991,14 @@ export class Game {
       (this.stage.area === 'finale' ? 0.85 : 0) + player.speed01 * 0.12 + player.overdriveBlend * 0.1,
     );
     this.rig.setRoll(-player.velocity.x * 0.0035);
-    this.rig.update(player.position.x, player.position.z, player.velocity.x, player.velocity.z, realDt);
+    this.rig.update(
+      player.position.x, player.position.z,
+      player.velocity.x, player.velocity.z,
+      realDt, player.facing,
+    );
+    // First person hides Rivet's body — you'd otherwise be inside his head.
+    const hide = this.rig.avatarHidden;
+    player.model.setAvatarOpacity(1 - hide);
     this.renderer.centreShadows(player.position.x, player.position.z);
 
     // --- grade ------------------------------------------------------------
@@ -970,6 +1052,7 @@ export class Game {
     this.processEnemyHits();
 
     // Beacons repair the pad.
+    swarm.liveEnemies = this.enemies.aliveCount;
     const repair = this.gadgets.repairRateAt(swarm.padPosition.x, swarm.padPosition.z);
     swarm.update(gdt, this.fx, repair);
 
@@ -1479,7 +1562,7 @@ export class Game {
         this.run.enemies += 1;
         if (this.mode === 'swarm') {
           this.swarm?.noteEnemyDefeated();
-          this.swarm?.addBank(6);
+          this.swarm?.addBank(3);
         }
         audio.play('enemyDefeat', { pos: { x: hit.x, y: hit.y, z: hit.z } });
         this.bumpCombo();
@@ -1506,7 +1589,7 @@ export class Game {
     for (const c of this.collectBuffer) {
       if (c.kind === 'bolt') {
         this.run.bolts += 1;
-        if (this.mode === 'swarm') this.swarm?.addBank(4);
+        if (this.mode === 'swarm') this.swarm?.addBank(2);
         this.bumpCombo();
         player.addOverdrive(CFG.overdrive.gainPerBolt, this.comboTier());
         const tier = this.comboTier();
@@ -2197,6 +2280,20 @@ export class Game {
         });
       }
     }
+  }
+
+  /** Wave sizes for the balance probe: [wave, total, squadSize, hpScale]. */
+  swarmCurve(upTo = 20): Array<[number, number, string]> {
+    const sw = this.swarm;
+    if (!sw) return [];
+    const out: Array<[number, number, string]> = [];
+    for (let n = 1; n <= upTo; n++) {
+      const comp = sw.composeWave(n);
+      let total = 0;
+      for (const c of comp) total += c.count;
+      out.push([n, total, comp.map((c) => `${c.kind}x${c.count}`).join(' ')]);
+    }
+    return out;
   }
 
   /** Swarm-mode diagnostics for the automated test. */

@@ -89,10 +89,19 @@ target.
 
 ## The camera
 
-`CameraRig` blends between two presets: `chase` (~35°, closer, the default) and
-`wide` (~43°, the original overhead). Switching eases over ~0.3s rather than
-cutting. The boss arena forces `wide` regardless of the setting, because its
-attacks come from off-screen.
+`CameraRig` blends between four presets: `chase` (~35°), `wide` (~43°), `follow`
+(~26° over-the-shoulder) and `fpv` (first person). Any preset can blend to any
+other; the rig keeps a `fromMode`/`mode` pair and eases between them.
+
+Presets carry a `rotates` weight. At 0 the camera uses a fixed world-space
+offset; at 1 it orbits to sit behind the player's heading, and `Game` rotates
+the stick vector by `rig.inputYaw` to match. At yaw 0 the orbiting maths
+collapses exactly to the world-aligned offset, which is what lets an overhead
+and an over-the-shoulder preset blend continuously instead of popping.
+
+The camera-relative rotation is applied to the **human stick only** — the
+playtest bot reasons in world space, and rotating its intentions makes it
+spiral.
 
 The focus point is a spring integrated in **fixed 1/120s sub-steps with
 exponential damping**. The obvious explicit-Euler form is unstable once

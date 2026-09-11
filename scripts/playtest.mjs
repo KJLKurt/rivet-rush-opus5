@@ -246,6 +246,46 @@ async function main() {
   const after = await page.evaluate(() => window.__rivet.profile().runsStarted);
   console.log(`  ${after >= before ? '✓' : '✗'} runsStarted persisted: ${before} → ${after}`);
 
+  // --- camera modes ------------------------------------------------------
+  console.log('▶ testing camera modes…');
+  for (const cam of ['chase', 'wide', 'follow', 'fpv']) {
+    await page.evaluate((c) => {
+      const p = window.__rivet.profile();
+      p.settings.camera = c;
+      window.__rivet.game.applySettings();
+      window.__rivet.game.abandon();
+    }, cam);
+    await sleep(400);
+    await page.evaluate(() => {
+      window.__rivet.skipTo(1);
+      window.__rivet.autoplay(true);
+    });
+    await page.waitForFunction(() => window.__rivet.state() === 'playing', null, { timeout: 40000 });
+    await sleep(6000);
+    const info = await page.evaluate(() => {
+      const g = window.__rivet.game;
+      const pl = g.playerRef;
+      const v = pl.model.root.position.clone().project(g.renderer.camera);
+      return {
+        onScreen: Math.abs(v.x) < 1.1 && v.y > -1.6 && v.y < 1.1 && v.z < 1,
+        y: Math.round((-v.y * 0.5 + 0.5) * 100),
+        moved: Math.hypot(pl.position.x, pl.position.z) > 0.5,
+      };
+    });
+    // First person deliberately hides the avatar, so only check it is playing.
+    const ok = cam === 'fpv' ? info.moved : info.onScreen && info.moved;
+    console.log(`  ${ok ? '✓' : '✗'} ${cam.padEnd(7)} player at ${info.y}% screen, moving: ${info.moved}`);
+    if (!ok) errors.push(`camera ${cam}: player not framed/moving`);
+    await page.evaluate(() => window.__rivet.autoplay(false));
+  }
+  await page.evaluate(() => {
+    const p = window.__rivet.profile();
+    p.settings.camera = 'chase';
+    window.__rivet.game.applySettings();
+    window.__rivet.game.abandon();
+  });
+  await sleep(500);
+
   // --- responsive sweep --------------------------------------------------
   console.log('▶ testing viewports…');
   for (const [name, v] of Object.entries(VIEWPORTS)) {

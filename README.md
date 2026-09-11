@@ -161,8 +161,9 @@ screen without forcing you to.
 
 ## Accessibility
 
-In **Settings**: a **camera** toggle (Close / Wide), master / music / effects
-volume, screen-shake intensity, a
+In **Settings**: a **difficulty** toggle (Relaxed gives more hearts and a gentler
+boss), four **camera** modes (Close, Wide, Behind, Goggles — the last two steer
+where you look), master / music / effects volume, screen-shake intensity, a
 **Calm mode** that cuts flashes and heavy effects, vibration toggle, a
 left-handed layout that mirrors the touch controls, bigger buttons, an FPS
 readout, and a graphics-quality override. Nothing important in the game is

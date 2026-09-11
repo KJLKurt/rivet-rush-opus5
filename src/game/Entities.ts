@@ -781,6 +781,8 @@ export class Enemies {
   sparkieAt: ((index: number) => { x: number; z: number } | null) | null = null;
   /** Radius past which a fleeing snatcher counts as having escaped. */
   escapeRadius = 34;
+  /** Multiplier applied to every newly spawned enemy's HP (Swarm scaling). */
+  hpScale = 1;
   /** Nearest player-built obstacle to chew through on the way to the pad. */
   blockingLookup: ((x: number, z: number, maxDist: number) => { x: number; z: number } | null) | null = null;
   /** Called when a pad-seeker is attacking a player-built gadget. */
@@ -811,7 +813,8 @@ export class Enemies {
 
     this.list.push({
       kind, model, x, z, vx: 0, vz: 0,
-      hp: cfg.hp, maxHp: cfg.hp,
+      hp: Math.max(1, Math.round(cfg.hp * this.hpScale)),
+      maxHp: Math.max(1, Math.round(cfg.hp * this.hpScale)),
       state: 'idle', timer: 0, cooldown: kind === 'zapper' ? 1.4 : 0.6,
       stun: 0, hitFlash: 0,
       phase: Math.random() * 6.28,

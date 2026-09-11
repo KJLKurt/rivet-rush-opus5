@@ -52,6 +52,8 @@ export class BossFight {
   readonly root = new THREE.Group();
 
   hp: number = CFG.boss.maxHp;
+  private maxHp: number = CFG.boss.maxHp;
+  private readonly relaxed: boolean;
   phase: BossPhase = 1;
   defeated = false;
 
@@ -87,7 +89,11 @@ export class BossFight {
   /** Pull applied to the player during the phase-3 vacuum. */
   vacuumPull = 0;
 
-  constructor() {
+  /** @param relaxed  softer ruleset: less health and longer punish windows. */
+  constructor(relaxed = false) {
+    this.relaxed = relaxed;
+    if (relaxed) this.hp = Math.round(CFG.boss.maxHp * 0.7);
+    this.maxHp = this.hp;
     this.model = createBoss();
     this.model.root.position.set(0, 0, -6);
     // The finale should feel like it towers over Rivet. Scaling the whole rig
@@ -142,7 +148,7 @@ export class BossFight {
   }
 
   get healthFraction(): number {
-    return clamp01(this.hp / CFG.boss.maxHp);
+    return clamp01(this.hp / this.maxHp);
   }
 
   get coreExposed(): boolean {
@@ -173,7 +179,9 @@ export class BossFight {
 
   /** Phase-scaled timing: later phases are quicker, never less readable. */
   private scale(v: number): number {
-    return v * (this.phase === 1 ? 1 : this.phase === 2 ? 0.86 : 0.74);
+    const phase = this.phase === 1 ? 1 : this.phase === 2 ? 0.86 : 0.74;
+    // Relaxed keeps every telegraph but gives more time to read it.
+    return v * phase * (this.relaxed ? 1.25 : 1);
   }
 
   update(dt: number, fx: Fx): void {
@@ -260,9 +268,11 @@ export class BossFight {
       case 'slam':
         if (done) {
           // The fist is buried — this is the punish window.
-          this.setState('stagger', CFG.boss.staggerTime);
+          this.setState('stagger', CFG.boss.staggerTime * (this.relaxed ? 1.3 : 1));
           this.onEvent?.('stagger');
-          this.onReward?.(bx, bz + 4, false);
+          // Phase 3 hands out a repair heart on every opening. By then the run
+          // is seven minutes old and losing it to chip damage is miserable.
+          this.onReward?.(bx, bz + 4, this.phase >= 3);
         }
         break;
 

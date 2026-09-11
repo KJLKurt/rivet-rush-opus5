@@ -228,15 +228,53 @@ Six picks per run out of eighteen options, stacking, means the "all-magnet",
 
 ## 9. Camera
 
-Two presets, switchable in Settings and blended over ~0.3s so a change mid-run
-never cuts:
+Four presets, switchable in Settings and blended over ~0.4s so a change mid-run
+never cuts. The boss arena forces WIDE regardless, because its attacks originate
+off-screen.
 
-- **Close** (default) — behind and above, ~35°. The cast reads about 40% bigger,
-  which is what makes friend-vs-foe legible at a glance.
-- **Wide** — the original ~43° overhead. Less character detail, more tactical
-  awareness; the better choice once a lot of things are converging on you.
+| | Angle | Steering | Notes |
+| --- | --- | --- | --- |
+| **CLOSE** (default) | ~35°, world-aligned | Absolute | The cast reads ~40% bigger than WIDE, which is what makes friend-vs-foe legible. |
+| **WIDE** | ~43°, world-aligned | Absolute | The original framing. Less character detail, more tactical awareness. |
+| **BEHIND** | ~26°, orbits behind you | Camera-relative | Over-the-shoulder. The horizon does the work; speed reads far better than from above. |
+| **GOGGLES** | First person | Camera-relative | Rivet's model is hidden; the board and his ground shadow stay for grounding. |
 
-The boss arena forces Wide regardless, because its attacks originate off-screen.
+The first two are **world-aligned**: the camera never rotates, so "push up"
+always means the same world direction. That absoluteness is a real feature — it
+is why a seven-year-old can play the game without ever thinking about the
+camera.
+
+### Making the stick agree with your eyes
+
+A three-quarter camera foreshortens the world's forward axis. At a 35° pitch,
+one metre "north" only moves you sin(35°) ≈ 0.57 of a metre up the screen, while
+one metre "east" moves a full metre across it. Feed the stick straight through
+and a 45° push visibly travels at about 30° — **the character does not go where
+you pointed.**
+
+This is why the shallower CLOSE camera felt wrong while the near-top-down WIDE
+camera felt fine: at 43° the same error is much smaller. The fix is to divide
+the stick's forward component by sin(camera elevation) before it reaches the
+movement code, then renormalise so top speed is unchanged. Verified by
+measurement: six stick directions across both world-aligned cameras now produce
+screen-space movement within a few degrees of where they point.
+
+Orbiting cameras don't need it — in an over-the-shoulder or first-person view
+"forward" is into the screen, so there's nothing to foreshorten — and the
+correction fades out with the preset blend.
+
+The last two **orbit to sit behind your heading**, and the stick is rotated into
+camera space to match. The yaw lags deliberately (tracking harder the faster you
+move, barely at all when idling) — snapping to your heading makes a turning
+player feel like they're on a rotating platform, and at speed it induces motion
+sickness.
+
+**On GOGGLES specifically:** it is offered because it looks fantastic and it's
+fun, not because it's the best way to play. Almost all of this game's danger
+information is drawn *on the ground* — enemy rings, slam markers, shell circles,
+shockwaves — and in first person, anything beside or behind you is simply
+invisible. The Settings screen says so plainly rather than letting a child
+discover it by losing.
 
 ## 10. Swarm mode — "Hold the Repair Pad"
 
@@ -251,6 +289,27 @@ The loop alternates:
 
 - **Build** (16 s, 24 s before wave 1) — rescue stragglers, collect bolts, spend.
 - **Fight** — a mixed wave spawns on the rim and walks in.
+
+### Why waves arrive as squads
+
+Drones spawn in **groups of four to eight that land together at the same point
+on the rim**, not as a steady one-at-a-time trickle. A drip is trivially handled
+by any static defence: each arrival gets focused down before the next appears,
+so a wall of turrets clears wave 20 as easily as wave 2 and the mode plateaus.
+A squad that lands together is what actually threatens an entrenched position —
+and it's what makes the player move rather than camp.
+
+Three things escalate together, because any one alone plateaus:
+
+- **Size** — 3 drones at wave 1, ~44 by wave 5, ~99 by wave 10.
+- **Health** — ×1 at wave 1 rising to ×2.3 by wave 10. Without this a fixed wall
+  of turret DPS eventually clears everything instantly no matter how many bodies
+  arrive.
+- **Composition** — one new type per wave, kept thereafter.
+
+Every fifth wave is an **elite wave**: 1.6× the bodies, announced with its own
+sting. A hard cap of 42 concurrent drones holds the rest in the queue, so a late
+wave stays overwhelming without costing frame rate.
 
 Each wave adds exactly one new enemy type and then keeps it, so the player is
 never asked to learn two behaviours at once. Wave 6 introduces the Snatcher,
@@ -278,6 +337,16 @@ decision; pointing at a tile is just friction. Gadgets have health and drones
 destroy them, so a defence erodes and has to be rebuilt — that's the tension.
 
 ## 11. Difficulty
+
+Two rulesets, in Settings. **Normal** is the game as designed. **Relaxed** gives
+two extra hearts, a shield, faster dash recharge, a boss with 30% less health,
+and 25% longer telegraphs on every one of its attacks — the tells stay identical,
+you just get more time to read them.
+
+Relaxed is **offered, not hidden**: lose at the finale on Normal and the results
+screen surfaces a one-tap button to switch. A child who keeps losing to the boss
+shouldn't need a parent to go digging through a settings menu.
+
 
 The curve is built from four independent dials, so it can be tuned without any
 one of them spiking:

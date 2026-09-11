@@ -497,6 +497,24 @@ export class RivetModel {
     this.lookY = clamp(-0.1, -0.4, 0.4);
   }
 
+  /**
+   * Fades the character out for first person. The board's underglow and the
+   * ground shadow stay, so the player keeps a sense of where they physically
+   * are even when the body is gone.
+   */
+  setAvatarOpacity(v: number): void {
+    const visible = v > 0.02;
+    if (this.bodyPivot.visible !== visible) {
+      this.bodyPivot.visible = visible;
+      this.board.visible = visible || v > 0;
+      for (const o of this.outlines) o.visible = visible;
+    }
+    // Keep the board itself just visible in first person — a sliver of deck at
+    // the bottom of the frame is a strong grounding cue.
+    this.board.visible = true;
+    this.groundShadow.visible = true;
+  }
+
   setOutlinesVisible(on: boolean): void {
     for (const o of this.outlines) o.visible = on;
   }

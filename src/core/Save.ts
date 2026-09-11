@@ -15,8 +15,19 @@ const MIRROR = 'rivet-rush:profile';
 const PROFILE_VERSION = 1;
 
 export type QualityLevel = 'auto' | 'low' | 'medium' | 'high';
-/** 'chase' rides closer and lower; 'wide' is the original overhead framing. */
-export type CameraSetting = 'chase' | 'wide';
+/**
+ * 'chase' rides closer and lower, 'wide' is the original overhead framing,
+ * 'follow' is an orbiting over-the-shoulder camera and 'fpv' is first person.
+ * The last two steer camera-relative; the first two steer in world space.
+ */
+export type CameraSetting = 'chase' | 'wide' | 'follow' | 'fpv';
+
+/**
+ * 'relaxed' gives more hearts, longer mercy invulnerability and a softer boss.
+ * It scores a little lower, and it is offered rather than hidden — a child who
+ * keeps losing to the finale should be able to find it without a parent.
+ */
+export type DifficultySetting = 'relaxed' | 'normal';
 
 export interface Settings {
   master: number;
@@ -35,6 +46,7 @@ export interface Settings {
   bigUI: boolean;
   /** Camera framing. The boss always forces 'wide' regardless. */
   camera: CameraSetting;
+  difficulty: DifficultySetting;
 }
 
 export interface HighScore {
@@ -82,6 +94,7 @@ export const DEFAULT_SETTINGS: Settings = {
   leftHanded: false,
   bigUI: false,
   camera: 'chase',
+  difficulty: 'normal',
 };
 
 export function defaultProfile(): Profile {
@@ -133,7 +146,8 @@ function migrate(raw: unknown): Profile {
   s.sfx = clampNum(s.sfx, 0, 1, base.settings.sfx);
   s.screenShake = clampNum(s.screenShake, 0, 1, base.settings.screenShake);
   if (!['auto', 'low', 'medium', 'high'].includes(s.quality)) s.quality = 'auto';
-  if (!['chase', 'wide'].includes(s.camera)) s.camera = 'chase';
+  if (!['chase', 'wide', 'follow', 'fpv'].includes(s.camera)) s.camera = 'chase';
+  if (!['relaxed', 'normal'].includes(s.difficulty)) s.difficulty = 'normal';
   return merged;
 }
 

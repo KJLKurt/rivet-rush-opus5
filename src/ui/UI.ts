@@ -6,7 +6,7 @@ import type { Upgrade } from '../game/Upgrades';
 import type { StageDef } from '../game/Stages';
 import { ACHIEVEMENTS, COSMETICS, cosmeticsOfKind, dailyModifiers } from '../game/Progression';
 import { save, DEFAULT_SETTINGS } from '../core/Save';
-import type { QualityLevel, CameraSetting } from '../core/Save';
+import type { QualityLevel, CameraSetting, DifficultySetting } from '../core/Save';
 import { audio } from '../core/Audio';
 import { input } from '../core/Input';
 import { formatScore, formatTime, clamp01, hashString, localDateKey } from '../core/Util';
@@ -288,6 +288,7 @@ export class UI {
             <div class="best-line subtle"></div>
             <div class="stat-grid"></div>
             <div class="unlock-list"></div>
+            <div class="retry-hint"></div>
           </div>
           <div class="results-actions">
             <button class="btn primary" data-act="again">${icon('refresh', 22)} PLAY AGAIN</button>
@@ -452,6 +453,14 @@ export class UI {
       case 'quit':
         audio.play('uiBack');
         this.game.abandon();
+        break;
+      case 'relax':
+        save.update((p) => {
+          p.settings.difficulty = 'relaxed';
+        });
+        audio.play('uiConfirm');
+        this.toast('Relaxed mode on!', 'heart', 2200);
+        el.closest('.retry-hint')?.classList.remove('show');
         break;
       case 'again':
         audio.play('uiConfirm');
@@ -924,6 +933,16 @@ export class UI {
       .map(([v, k]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`)
       .join('');
 
+    // If they keep losing at the finale, surface Relaxed rather than making
+    // them go hunting for it in Settings.
+    const stuck = !r.won && r.stagesCleared >= 6 && save.profile.settings.difficulty === 'normal';
+    const hint = el.querySelector('.retry-hint') as HTMLElement;
+    hint.classList.toggle('show', stuck);
+    hint.innerHTML = stuck
+      ? `${icon('heart', 20)}<span>Tough one! Try <b>RELAXED</b> mode for more hearts.</span>
+         <button class="btn ghost" data-act="relax">Turn on</button>`
+      : '';
+
     const unlocks = [
       ...r.achievements.map((a) => ({ icon: a.icon, name: a.name, desc: a.desc })),
       ...r.cosmetics.map((c) => ({ icon: 'brush', name: c.name, desc: `New ${c.kind} unlocked!` })),
@@ -996,13 +1015,26 @@ export class UI {
       ${toggle('bigUI', 'Bigger buttons', 'install')}
       ${toggle('showFps', 'Show FPS', 'info')}
       <div class="row">
+        <div class="row-label">${icon('heart', 22)}Difficulty</div>
+        <div class="seg" data-seg="diff">
+          ${([['relaxed', 'RELAXED'], ['normal', 'NORMAL']] as const)
+            .map(([v, l]) => `<button class="${s.difficulty === v ? 'on' : ''}" data-diff="${v}">${l}</button>`)
+            .join('')}
+        </div>
+      </div>
+      <p class="subtle cam-note">RELAXED gives more hearts, a shield, and a gentler boss.</p>
+      <div class="row">
         <div class="row-label">${icon('eye', 22)}Camera</div>
-        <div class="seg" data-seg="camera">
-          ${([['chase', 'CLOSE'], ['wide', 'WIDE']] as const)
+        <div class="seg seg-wrap" data-seg="camera">
+          ${([['chase', 'CLOSE'], ['wide', 'WIDE'], ['follow', 'BEHIND'], ['fpv', 'GOGGLES']] as const)
             .map(([v, l]) => `<button class="${s.camera === v ? 'on' : ''}" data-cam="${v}">${l}</button>`)
             .join('')}
         </div>
       </div>
+      <p class="subtle cam-note">
+        BEHIND and GOGGLES steer where you look. GOGGLES is the tricky one —
+        you can't see what's sneaking up behind you.
+      </p>
       <div class="row">
         <div class="row-label">${icon('settings', 22)}Graphics</div>
         <div class="seg" data-seg="quality">
@@ -1044,6 +1076,18 @@ export class UI {
         audio.play('uiToggle');
         this.game.applySettings();
         this.applyBodyClasses();
+      });
+    });
+
+    body.querySelectorAll('[data-diff]').forEach((btnEl) => {
+      const el = btnEl as HTMLElement;
+      el.addEventListener('click', () => {
+        save.update((p) => {
+          p.settings.difficulty = el.dataset.diff as DifficultySetting;
+        });
+        body.querySelectorAll('[data-diff]').forEach((o) => o.classList.remove('on'));
+        el.classList.add('on');
+        audio.play('uiConfirm');
       });
     });
 

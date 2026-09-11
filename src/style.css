@@ -1403,6 +1403,23 @@ input[type='range']::-moz-range-thumb {
   color: #04243a;
 }
 
+/* Four camera options don't fit on one line on a phone. */
+.seg-wrap {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 62%;
+}
+
+.seg-wrap button { padding: 7px 10px; font-size: 0.72em; }
+
+.cam-note {
+  margin: -4px 4px 8px;
+  text-align: right;
+  line-height: 1.4;
+  font-size: 0.72em;
+  opacity: 0.8;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
@@ -1833,3 +1850,22 @@ body.big-ui { --ui-scale: 1.22; }
 
 .mode-btn:active { transform: translateY(4px); box-shadow: 0 2px 0 #4a2a8c; }
 .mode-btn.story:active { box-shadow: 0 2px 0 #b8621a; }
+
+/* Offered on the results screen when the finale keeps beating you. */
+.retry-hint {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: 4px 0 12px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: rgba(255, 111, 145, 0.14);
+  border: 2px solid rgba(255, 111, 145, 0.5);
+  font-size: 0.85em;
+}
+
+.retry-hint.show { display: flex; }
+.retry-hint .ic { color: var(--pink); flex: none; }
+.retry-hint b { color: var(--pink); }

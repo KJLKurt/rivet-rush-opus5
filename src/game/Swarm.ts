@@ -118,17 +118,29 @@ export class SwarmDirector {
     return out;
   }
 
+  /** Enemy HP multiplier for the current wave. */
+  get hpScale(): number {
+    // Without this, a fixed wall of turret DPS eventually clears every wave
+    // instantly and the mode plateaus no matter how many bodies arrive.
+    return 1 + Math.max(0, this.wave - 2) * 0.16;
+  }
+
+  /** True on the big "elite" waves that arrive as one huge simultaneous drop. */
+  isEliteWave(n: number): boolean {
+    return n > 0 && n % 5 === 0;
+  }
+
   /**
    * Wave composition. One new enemy type is introduced at a time and then kept,
    * so the player is never asked to learn two behaviours in the same wave.
    */
   composeWave(n: number): WaveComposition[] {
     const out: WaveComposition[] = [];
-    const scale = 1 + n * 0.32;
+    const elite = this.isEliteWave(n) ? 1.6 : 1;
     const add = (kind: AnyEnemyKind, base: number, from: number): void => {
       if (n < from) return;
-      const count = Math.max(1, Math.round(base * (1 + (n - from) * 0.36)));
-      out.push({ kind, count: Math.min(count, 14) });
+      const count = Math.max(1, Math.round(base * (1 + (n - from) * 0.5) * elite));
+      out.push({ kind, count: Math.min(count, 22) });
     };
     add('buzzbot', 3, 1);
     add('skitter', 4, 2);
@@ -140,7 +152,6 @@ export class SwarmDirector {
     add('lobber', 1, 8);
     add('shieldbot', 2, 9);
     add('warden', 1, 11);
-    void scale;
     return out;
   }
 
@@ -148,22 +159,66 @@ export class SwarmDirector {
   private queueWave(n: number): void {
     const comp = this.composeWave(n);
     this.spawnQueue.length = 0;
-    let t = 0;
-    // Interleave the types so a wave arrives as a mixed group rather than as
-    // five separate single-species trains.
+
+    // Enemies arrive in SQUADS, not as a steady trickle.
+    //
+    // A one-at-a-time drip is trivially handled by any static defence: each
+    // arrival gets focused down before the next appears, so a wall of turrets
+    // clears wave 20 as easily as wave 2 and the mode plateaus. Grouping four
+    // to eight drones into a squad that lands together, at the same point on
+    // the rim, is what actually threatens an entrenched position — and it's
+    // what makes the player move rather than camp.
     const pools = comp.map((c) => ({ kind: c.kind, left: c.count }));
     let total = 0;
     for (const p of pools) total += p.left;
+
+    const squadSize = Math.min(8, 3 + Math.floor(n / 2));
+    const gapBetweenSquads = Math.max(1.6, 4.2 - n * 0.18);
+    let t = 0;
+    let inSquad = 0;
     for (let i = 0; i < total; i++) {
       const live = pools.filter((p) => p.left > 0);
       const pick = live[Math.floor(this.rng() * live.length)]!;
       pick.left -= 1;
       this.spawnQueue.push({ kind: pick.kind, at: t });
-      t += 0.42 + this.rng() * 0.5;
+      // Members of a squad land within a fraction of a second of each other.
+      inSquad += 1;
+      if (inSquad >= squadSize) {
+        inSquad = 0;
+        t += gapBetweenSquads;
+      } else {
+        t += 0.06;
+      }
     }
     this.aliveFromWave = total;
     this.onWaveStart?.(n, comp);
   }
+
+  /** Squads share a rim position, so they arrive as a group from one side. */
+  private squadAngle = 0;
+  private squadCounter = 0;
+
+  nextSpawnPoint(radius: number, out: { x: number; z: number }): void {
+    if (this.squadCounter <= 0) {
+      this.squadCounter = Math.min(8, 3 + Math.floor(this.wave / 2));
+      this.squadAngle = this.rng() * Math.PI * 2;
+    }
+    this.squadCounter -= 1;
+    // Small jitter so they don't stack on one pixel.
+    const a = this.squadAngle + (this.rng() - 0.5) * 0.5;
+    const r = radius - 2.2 - this.rng() * 1.5;
+    out.x = Math.cos(a) * r;
+    out.z = Math.sin(a) * r;
+  }
+
+  /**
+   * How many drones are on the field right now. The director will not exceed
+   * `maxConcurrent`, holding the rest of the wave in the queue until slots free
+   * up — a late wave is 170+ bodies, and rendering them all at once would cost
+   * more frame rate than it adds tension.
+   */
+  liveEnemies = 0;
+  readonly maxConcurrent = 42;
 
   /** Called by the game whenever an enemy dies, so the wave can end. */
   noteEnemyDefeated(): void {
@@ -226,12 +281,15 @@ export class SwarmDirector {
       }
     } else if (this.phase === 'fight') {
       this.waveClock += dt;
-      while (this.spawnQueue.length > 0 && this.spawnQueue[0]!.at <= this.waveClock) {
+      while (
+        this.spawnQueue.length > 0 &&
+        this.spawnQueue[0]!.at <= this.waveClock &&
+        this.liveEnemies < this.maxConcurrent
+      ) {
         const next = this.spawnQueue.shift()!;
         // Spawn on the rim, so waves always arrive from outside the play space.
-        const a = this.rng() * Math.PI * 2;
-        const r = this.arenaRadius - 2.2;
-        this.onSpawn?.(next.kind, Math.cos(a) * r, Math.sin(a) * r);
+        this.nextSpawnPoint(this.arenaRadius, _spawnPt);
+        this.onSpawn?.(next.kind, _spawnPt.x, _spawnPt.z);
       }
       if (this.spawnQueue.length === 0 && this.aliveFromWave <= 0) {
         this.onWaveClear?.(this.wave);
@@ -295,3 +353,5 @@ export class SwarmDirector {
     this.padRing.geometry.dispose();
   }
 }
+
+const _spawnPt = { x: 0, z: 0 };

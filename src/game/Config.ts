@@ -127,12 +127,12 @@ export const CFG = {
   },
 
   boss: {
-    maxHp: 135,
+    maxHp: 120,
     phase2At: 0.66,
     phase3At: 0.33,
     /** Seconds the core stays open after a successful stagger. */
-    staggerTime: 4.6,
-    coreDamagePerDash: 6,
+    staggerTime: 5.4,
+    coreDamagePerDash: 7.5,
     coreDamagePerZap: 1.1,
     arenaRadius: 24,
   },
